@@ -4,25 +4,22 @@
 ufw не установлен по умолчанию в минимальной версии
 fedor@pgindocker:~$ fedor@pgindocker:~$ sudo ufw status verbose
 sudo: ufw: command not found
-
-#установил ssh
+установил ssh
 sudo apt update
 sudo apt install openssh-server
-# в конфиге /etc/ssh/sshd_config выставил порт 22 и IP где запускаю клиента PuTTY
+в конфиге /etc/ssh/sshd_config выставил порт 22 и IP где запускаю клиента PuTTY
 sudo systemctl daemon-reload
 sudo systemctl restart ssh.socket
-
-# Создал каталог
+Создал каталог
 fedor@pgindocker:~$ sudo mkdir /var/lib/postgresql
-
-# Установил докера как было показано в лекции
-# Add Docker's official GPG key:
+Установил докера как было показано в лекции
+Add Docker's official GPG key:
 sudo apt-get update
 sudo apt-get install ca-certificates curl
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
-# Add the repository to Apt sources:
+Add the repository to Apt sources:
 echo \
   "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
   $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
