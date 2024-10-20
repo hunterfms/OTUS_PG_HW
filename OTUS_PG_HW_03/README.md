@@ -1,8 +1,7 @@
 Подготовка виртуалки
-# Создал виртуалку на VMVirtualBox и установил с iso минимальную Server Ubuntu 22.04
-# + для удобства приложения - mc, vim, net-tools.
-
-# ufw не установлен по умолчанию в минимальной версии
+Создал виртуалку на VMVirtualBox и установил с iso минимальную Server Ubuntu 22.04
+Дополнительно для удобства установил приложения - mc, vim, net-tools.
+ufw не установлен по умолчанию в минимальной версии
 fedor@pgindocker:~$ fedor@pgindocker:~$ sudo ufw status verbose
 sudo: ufw: command not found
 
