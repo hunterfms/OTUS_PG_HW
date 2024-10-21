@@ -4,7 +4,7 @@
 3) ufw не установлен по умолчанию в минимальной версии
 ```
 fedor@pgindocker:~$ sudo ufw status verbose
-sudo: ufw: command not found
+fedor@pgindocker:~$ sudo: ufw: command not found
 ```
 4) Установил ssh
 ```
