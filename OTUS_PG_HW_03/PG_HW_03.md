@@ -203,3 +203,5 @@ postgres=# select * from test;
 postgres=# \q
 fedor@pgindocker:/$
 ```
+## задание +
+1) еще в работе
