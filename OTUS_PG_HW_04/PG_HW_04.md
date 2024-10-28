@@ -190,7 +190,7 @@ LINE 1: insert into t4 values (2);
 
 ```
 
-10) Бонусом попробовал REVOKE для схемы postgres.public под пользователем postgres и он отработал, но при рестарте СУБД пользователь postgres все еще создавал таблицы в базе postgres! Видимо для суперпользователя нет ограничений даже при REVOKE.
+10) Бонусом попробовал REVOKE для схемы postgres.public под пользователем postgres и он отработал, но при рестарте СУБД пользователь postgres все еще создавал таблицы в схеме postgres.public! Видимо для суперпользователя нет ограничений даже при REVOKE.
 ```
 postgres=# select rolsuper from pg_roles where rolname = 'postgres';
  rolsuper
