@@ -72,6 +72,7 @@ Data Storage: hdd
 ![1](https://github.com/user-attachments/assets/e8434e23-1e75-4fe5-9f03-52b258370eb8)
 
 Какие параметры сменились по рекомендации:
+
 shared_buffers = 128MB на shared_buffers = 256MB  Рекомендуемое значение для shared_buffers — 25% доступной системной памяти.
 
 #effective_cache_size = 4GB на effective_cache_size = 768MB  Рекомендуемое значение: примерно 50–75% от общего объёма оперативной памяти системы.
