@@ -17,7 +17,7 @@ Ver Cluster Port Status Owner    Data directory              Log file
 15  main    5432 online postgres /var/lib/postgresql/15/main /var/log/postgresql/postgresql-15-main.log
 fedor@pg15:~$
 ```
-3) Создал базу loadtesting для проведения нагрузочного тестирования с параметрами кластера по умолчанию. Запустил инициализацию базы для теста.
+3) Создал базу loadtest_defaultconf для проведения нагрузочного тестирования с параметрами кластера по умолчанию. Запустил инициализацию базы для теста.
 ```
 postgres=# create database loadtest_defaultconf;
 CREATE DATABASE
