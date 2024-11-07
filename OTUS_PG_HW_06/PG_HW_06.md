@@ -188,4 +188,30 @@ postgres=#
 
 ![1](https://github.com/user-attachments/assets/de9859a4-aa07-4a4e-9399-991a68b38c19)
 
-5)
+5) Пять раз обновил все строки в таблице с добавлением символа и просмотрел время последнего автоваукуума.
+```
+postgres=# update textdata set text = 'textdata_1';
+UPDATE 1000000
+postgres=# update textdata set text = 'textdata_1_2';
+UPDATE 1000000
+postgres=# update textdata set text = 'textdata_1_2_3';
+UPDATE 1000000
+postgres=# update textdata set text = 'textdata_1_2_3_4';
+UPDATE 1000000
+postgres=# update textdata set text = 'textdata_1_2_3_4_5';
+UPDATE 1000000
+
+postgres=# SELECT relname, n_live_tup, n_dead_tup, trunc(100*n_dead_tup/(n_live_tup+1))::float "ratio%", last_autovacuum FROM pg_stat_user_TABLEs WHERE relname = 'textdata';                                                                                          relname  | n_live_tup | n_dead_tup | ratio% |        last_autovacuum
+----------+------------+------------+--------+-------------------------------
+ textdata |    1000000 |          0 |      0 | 2024-11-07 15:07:16.701566+00
+(1 row)
+
+postgres=# select current_time;
+    current_time
+--------------------
+ 15:12:33.745234+00
+(1 row)
+
+```
+6) n
+   
