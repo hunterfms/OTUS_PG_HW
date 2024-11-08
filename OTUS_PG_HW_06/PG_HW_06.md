@@ -185,33 +185,139 @@ postgres=# SELECT pg_relation_filepath('textdata');
 
 postgres=#
 ```
+![1](https://github.com/user-attachments/assets/c7b79601-b4cd-4fc3-98a1-41195d68d378)
 
-![1](https://github.com/user-attachments/assets/de9859a4-aa07-4a4e-9399-991a68b38c19)
-
-5) Пять раз обновил все строки в таблице с добавлением символа и просмотрел время последнего автоваукуума.
+5) Пять раз обновил все строки в таблице с добавлением символа и просмотрел время последнего автоваукуума. Дождался пока автовакуум выполниться и в итоге были обнулены n_dead_tup (мертвые строки были удалены) для данной таблицы.
 ```
-postgres=# update textdata set text = 'textdata_1';
+postgres=# update textdata set text = 'text1';
 UPDATE 1000000
-postgres=# update textdata set text = 'textdata_1_2';
+postgres=# update textdata set text = 'text12';
 UPDATE 1000000
-postgres=# update textdata set text = 'textdata_1_2_3';
+postgres=# update textdata set text = 'text123';
 UPDATE 1000000
-postgres=# update textdata set text = 'textdata_1_2_3_4';
+postgres=# update textdata set text = 'text1234';
 UPDATE 1000000
-postgres=# update textdata set text = 'textdata_1_2_3_4_5';
+postgres=# update textdata set text = 'text12345';
 UPDATE 1000000
-
-postgres=# SELECT relname, n_live_tup, n_dead_tup, trunc(100*n_dead_tup/(n_live_tup+1))::float "ratio%", last_autovacuum FROM pg_stat_user_TABLEs WHERE relname = 'textdata';                                                                                          relname  | n_live_tup | n_dead_tup | ratio% |        last_autovacuum
-----------+------------+------------+--------+-------------------------------
- textdata |    1000000 |          0 |      0 | 2024-11-07 15:07:16.701566+00
-(1 row)
-
 postgres=# select current_time;
     current_time
 --------------------
- 15:12:33.745234+00
+ 12:21:31.332385+00
 (1 row)
 
+postgres=# SELECT relname, n_live_tup, n_dead_tup, trunc(100*n_dead_tup/(n_live_tup+1))::float "ratio%", last_autovacuum FROM pg_stat_user_TABLEs WHERE relname = 'textdata';
+ relname  | n_live_tup | n_dead_tup | ratio% |        last_autovacuum
+----------+------------+------------+--------+-------------------------------
+ textdata |    1000000 |    1999877 |    199 | 2024-11-08 12:21:04.382399+00
+(1 row)
+
+postgres=# SELECT relname, n_live_tup, n_dead_tup, trunc(100*n_dead_tup/(n_live_tup+1))::float "ratio%", last_autovacuum FROM pg_stat_user_TABLEs WHERE relname = 'textdata';
+ relname  | n_live_tup | n_dead_tup | ratio% |        last_autovacuum
+----------+------------+------------+--------+-------------------------------
+ textdata |    1000000 |          0 |      0 | 2024-11-08 12:22:04.570964+00
+(1 row)
 ```
-6) n
-   
+6) Далее эксперимент не удался, поскольку переполнилось место на диске. Автовакуум протестирован в предыдущем пункте поэтому в 
+ следующим пунктом пересоздам таблицу м пере заполню с выключенным автовакуумом. 
+```
+postgres=# ALTER TABLE textdata SET (autovacuum_enabled = off);
+ALTER TABLE
+postgres=# update textdata set text = 'text123451';
+UPDATE 1000000
+postgres=# update textdata set text = 'text1234512';
+UPDATE 1000000
+postgres=# update textdata set text = 'text12345123';
+UPDATE 1000000
+postgres=# update textdata set text = 'text123451234';
+UPDATE 1000000
+postgres=# update textdata set text = 'text1234512345';
+ERROR:  could not extend file "base/5/25725": wrote only 4096 of 8192 bytes at block 31556
+HINT:  Check free disk space.
+postgres=# ALTER TABLE textdata SET (autovacuum_enabled = on);                  ALTER TABLE
+postgres=# vacuum full;
+ERROR:  could not extend file "base/5/26459": No space left on device
+HINT:  Check free disk space.
+postgres=#
+
+```
+7) Пересоздал таблицу (truncate пересоздает её на физ. уровне) и провел полный вакуум вручную, что бы быстрее вычистить место на диске.
+```
+postgres=# truncate table textdata;
+TRUNCATE TABLE
+postgres=# vacuum full;
+VACUUM
+postgres=#
+```
+8) Заполнил таблицу снова, но уже со 100 000 строк. Отключил автовакуум для таблицы до обновления, что бы он не сработал между транзакциями обновления. Выполнил 10 обновлений каждый раз с добавлением символа и проверил размера файла до, и после транзакций.
+```
+postgres=# insert into textdata
+SELECT generate_series(1,100000) AS id, md5(random()::text) AS text;
+INSERT 0 100000
+postgres=# SELECT pg_relation_filepath('textdata');
+ pg_relation_filepath
+----------------------
+ base/5/26770
+
+ (1 row)
+```
+  
+![2](https://github.com/user-attachments/assets/4cfe6ef0-12c8-491d-864c-5cedc92c056f)
+
+```
+postgres=# ALTER TABLE textdata SET (autovacuum_enabled = off);
+ALTER TABLE
+postgres=# update textdata set text = 'text1';
+UPDATE 100000
+postgres=# update textdata set text = 'text12';
+UPDATE 100000
+postgres=# update textdata set text = 'text123';
+UPDATE 100000
+postgres=# update textdata set text = 'text1234';
+UPDATE 100000
+postgres=# update textdata set text = 'text12345';
+UPDATE 100000
+postgres=# update textdata set text = 'text123456';
+UPDATE 100000
+postgres=# update textdata set text = 'text1234567';
+UPDATE 100000
+postgres=# update textdata set text = 'text12345678';
+UPDATE 100000
+postgres=# update textdata set text = 'text123456789';
+UPDATE 100000
+postgres=# update textdata set text = 'text1234567890';
+UPDATE 100000
+postgres=#
+
+```
+![3](https://github.com/user-attachments/assets/20287ce2-1511-4b81-a2df-1305108cafa8)
+
+Как видим размер файла таблицы после обновления значительно вырос примерно с 6ти килобайт до 52х мегобайт. Далее можно заметить что количество мертвых строк значительно возросло n_dead_tup = 999399 и их количество в таблице занимает ratio% = 999
+
+```
+postgres=# SELECT relname, n_live_tup, n_dead_tup, trunc(100*n_dead_tup/(n_live_tup+1))::float "ratio%", last_autovacuum FROM pg_stat_user_TABLEs WHERE relname = 'textdata';
+ relname  | n_live_tup | n_dead_tup | ratio% |        last_autovacuum
+----------+------------+------------+--------+-------------------------------
+ textdata |     100000 |     999399 |    999 | 2024-11-08 12:45:04.318503+00
+(1 row)
+```
+
+9) Включил автовакуум для таблицы и подождал когда он сработает.
+```
+postgres=# ALTER TABLE textdata SET (autovacuum_enabled = on);
+ALTER TABLE
+```
+
+подождал выполнения автовакуума
+
+```
+postgres=# SELECT relname, n_live_tup, n_dead_tup, trunc(100*n_dead_tup/(n_live_tup+1))::float "ratio%", last_autovacuum FROM pg_stat_user_TABLEs WHERE relname = 'textdata';
+ relname  | n_live_tup | n_dead_tup | ratio% |        last_autovacuum
+----------+------------+------------+--------+-------------------------------
+ textdata |     100000 |          0 |      0 | 2024-11-08 13:07:07.782287+00
+(1 row)
+
+postgres=#
+```
+
+
+
