@@ -81,8 +81,7 @@ postgres=# select * from forlocks;
 ```
 5) Смотрим лог блокировок с зафиксированной ситуацией болкировки. DETAIL: Process holding the lock: 957. Wait queue: 1007 while updating tuple (0,1) in relation "forlocks"
 ```
-fedor@pg15:/var/lib/postgresql/15$ sudo tail n100 /var/log/postgresql/postgresql-15-main.log
-tail: cannot open 'n100' for reading: No such file or directory
+fedor@pg15:/var/lib/postgresql/15$ sudo tail /var/log/postgresql/postgresql-15-main.log
 ==> /var/log/postgresql/postgresql-15-main.log <==
 2024-11-13 14:53:32.231 UTC [1007] postgres@postgres DETAIL:  Process holding the lock: 957. Wait queue: 1007.
 2024-11-13 14:53:32.231 UTC [1007] postgres@postgres CONTEXT:  while updating tuple (0,1) in relation "forlocks"
@@ -98,3 +97,75 @@ fedor@pg15:/var/lib/postgresql/15$
 
 ```
 
+## Блокировка без условия where возможны, если обновлять в двух транзакциях одно и то же поле. Столбец бцдет обновляться полность так,  как обновление будет проводиться без условия where и сследовательно наложиться эксклюзивная блокировка на всю таблицу.
+
+6) Заполнил таблицу тремя строками с идентификатором поля и числовым значением и попробовал обновить весь столбец числового поля в открытой транзакции не завершаяя её и во второй сесии выполнить тоже самое.
+
+первая сессия
+```
+postgres=# select * from forlocks;
+ id | value
+----+-------
+  1 |    50
+  2 |    75
+  3 |   100
+(3 rows)
+
+postgres=# BEGIN;
+BEGIN
+postgres=*# update forlocks set value = value + 25;
+UPDATE 3
+postgres=*# commit;
+COMMIT
+```
+
+вторая сессия
+```
+postgres=# update forlocks set value = value + 10;
+UPDATE 3
+postgres=# select * from forlocks;
+ id | value
+----+-------
+  1 |    85
+  2 |   110
+  3 |   135
+(3 rows)
+
+postgres=#
+
+```
+
+в третьей смотрел блокировку
+```
+postgres=# select * from pg_locks;
+   locktype    | database | relation | page | tuple | virtualxid | transactionid | classid | objid | objsubid | virtualtransaction | pid |       mode       | granted | fastpath |           waitstart
+---------------+----------+----------+------+-------+------------+---------------+---------+-------+----------+--------------------+-----+------------------+---------+----------+-------------------------------
+ relation      |        5 |    12073 |      |       |            |               |         |       |          | 5/17               | 901 | AccessShareLock  | t       | t        |
+ virtualxid    |          |          |      |       | 5/17       |               |         |       |          | 5/17               | 901 | ExclusiveLock    | t       | t        |
+ relation      |        5 |    27321 |      |       |            |               |         |       |          | 4/6                | 861 | RowExclusiveLock | t       | t        |
+ virtualxid    |          |          |      |       | 4/6        |               |         |       |          | 4/6                | 861 | ExclusiveLock    | t       | t        |
+ relation      |        5 |    27321 |      |       |            |               |         |       |          | 3/11               | 827 | RowExclusiveLock | t       | t        |
+ virtualxid    |          |          |      |       | 3/11       |               |         |       |          | 3/11               | 827 | ExclusiveLock    | t       | t        |
+ tuple         |        5 |    27321 |    0 |     1 |            |               |         |       |          | 4/6                | 861 | ExclusiveLock    | t       | f        |
+ transactionid |          |          |      |       |            |        648221 |         |       |          | 4/6                | 861 | ShareLock        | f       | f        | 2024-11-13 16:01:46.368623+00
+ transactionid |          |          |      |       |            |        648222 |         |       |          | 4/6                | 861 | ExclusiveLock    | t       | f        |
+ transactionid |          |          |      |       |            |        648221 |         |       |          | 3/11               | 827 | ExclusiveLock    | t       | f        |
+(10 rows)
+
+postgres=#
+```
+
+7) В итоге, в журнале зарегистрирована блокировка на уровне всей таблицы.
+```
+fedor@pg15:~$ sudo tail -n10 /var/log/postgresql/postgresql-15-main.log
+2024-11-13 16:01:46.597 UTC [861] postgres@postgres DETAIL:  Process holding the lock: 827. Wait queue: 861.
+2024-11-13 16:01:46.597 UTC [861] postgres@postgres CONTEXT:  while updating tuple (0,1) in relation "forlocks"
+2024-11-13 16:01:46.597 UTC [861] postgres@postgres STATEMENT:  update forlocks set value = value + 10;
+2024-11-13 16:03:00.912 UTC [713] LOG:  checkpoint starting: time
+2024-11-13 16:03:01.145 UTC [713] LOG:  checkpoint complete: wrote 5 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.216 s, sync=0.006 s, total=0.234 s; sync files=4, longest=0.003 s, average=0.002 s; distance=0 kB, estimate=0 kB
+2024-11-13 16:06:12.033 UTC [861] postgres@postgres LOG:  process 861 acquired ShareLock on transaction 648221 after 265664.427 ms
+2024-11-13 16:06:12.033 UTC [861] postgres@postgres CONTEXT:  while updating tuple (0,1) in relation "forlocks"
+2024-11-13 16:06:12.033 UTC [861] postgres@postgres STATEMENT:  update forlocks set value = value + 10;
+2024-11-13 16:08:00.164 UTC [713] LOG:  checkpoint starting: time
+2024-11-13 16:08:00.312 UTC [713] LOG:  checkpoint complete: wrote 2 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.117 s, sync=0.005 s, total=0.148 s; sync files=2, longest=0.003 s, average=0.003 s; distance=0 kB, estimate=0 kB
+```
