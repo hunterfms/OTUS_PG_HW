@@ -79,7 +79,7 @@ postgres=# select * from forlocks;
 (1 row)
 
 ```
-5) Смотрим лог блокировок. DETAIL: Process holding the lock: 957. Wait queue: 1007 while updating tuple (0,1) in relation "forlocks"
+5) Смотрим лог блокировок с зафиксированной ситуацией болкировки. DETAIL: Process holding the lock: 957. Wait queue: 1007 while updating tuple (0,1) in relation "forlocks"
 ```
 fedor@pg15:/var/lib/postgresql/15$ sudo tail n100 /var/log/postgresql/postgresql-15-main.log
 tail: cannot open 'n100' for reading: No such file or directory
