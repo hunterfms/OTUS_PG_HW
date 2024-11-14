@@ -97,9 +97,104 @@ fedor@pg15:/var/lib/postgresql/15$
 
 ```
 
-Блокировка  без условия where возможны (задание *), если обновлять в двух транзакциях одно и то же поле. Столбец бцдет обновляться полность так,  как обновление будет проводиться без условия where и сследовательно наложиться эксклюзивная блокировка на всю таблицу.
+6) Взаимоблокировка.  Создал три сессии с открытыми отранзакциями и воспроизвел взаимоблокировку.
 
-6) Пересоздал таблицу с идентификатором поля и числовым значением и попробовал обновить весь столбец числового поля в открытой транзакции не завершаяя её и во второй сесии выполнить тоже самое.
+первая сессия
+```
+postgres=# select * from forlocks;
+ id | value
+----+-------
+  2 |   110
+  3 |   135
+  1 |   105
+(3 rows)
+
+postgres=# show deadlock_timeout;
+ deadlock_timeout
+------------------
+ 200ms
+(1 row)
+
+postgres=# begin;
+BEGIN
+postgres=*# update forlocks set value = value + 5 where id in (1);
+UPDATE 1
+```
+вторая сессия
+```
+postgres=# begin;
+BEGIN
+postgres=*# update forlocks set value = value + 15 where id in (2);
+UPDATE 1
+```
+третья сессия
+```
+BEGIN
+postgres=*# update forlocks set value = value + 20 where id in (3);
+UPDATE 1
+```
+первая сессия - накладываем блокировку на первую сессию второй. (теперь первая ждет отрабтки второй)
+```
+postgres=*# update forlocks set value = value + 5 where id in (2);
+```
+вторая сессия - накладываем блокировку на вторую сессию третьей (теперь вторая ждет отработки третьей)
+```
+postgres=*# update forlocks set value = value + 15 where id in (3);
+```
+третья сессия - накладываем блокировку на третью сессию первой. В итоге получаем зацикленную взаиммоблокировку между требя мессиями и как результат обрыв одной из них. Получаем автоматический откат транзакции в третьей сессии, чем свидетельствует отказ (после разрешения взаимоблокировки) выполнить commit;  
+```
+postgres=*# update forlocks set value = value + 20 where id in (1);
+ERROR:  deadlock detected
+DETAIL:  Process 1076 waits for ShareLock on transaction 648243; blocked by process 1071.
+Process 1071 waits for ShareLock on transaction 648244; blocked by process 1080.
+Process 1080 waits for ShareLock on transaction 648245; blocked by process 1076.
+HINT:  See server log for query details.
+CONTEXT:  while updating tuple (0,25) in relation "forlocks"
+postgres=!# commit;
+ROLLBACK
+postgres=#
+```
+
+Так как взаимоблокировка автоматически разрешилась вторая сессия была высвобождена для последующего завершения, хотя все еще блокировала первую. Откат взаимоблокировки оставил обычную блокировку между двумя рандомными сессиями, которые в итоге завершились спустя время поочередно после commit. Эксперимент показал, что СУБД убило последнюю по времени создания транзакцию, расставив приоритеты при откате таким вот образом.
+
+7) Смотрим логи с указанием наличиф взаимоблокировки. ERROR:  deadlock detected
+```
+fedor@pg15:~$ sudo tail -n15 /var/log/postgresql/postgresql-15-main.log
+[sudo] password for fedor:
+        Process 1076: update forlocks set value = value + 20 where id in (1);
+        Process 1071: update forlocks set value = value + 5 where id in (2);
+        Process 1080: update forlocks set value = value + 15 where id in (3);
+2024-11-14 15:09:11.097 UTC [1076] postgres@postgres HINT:  See server log for query details.
+2024-11-14 15:09:11.097 UTC [1076] postgres@postgres CONTEXT:  while updating tuple (0,25) in relation "forlocks"
+2024-11-14 15:09:11.097 UTC [1076] postgres@postgres STATEMENT:  update forlocks set value = value + 20 where id in (1);
+2024-11-14 15:09:11.098 UTC [1080] postgres@postgres LOG:  process 1080 acquired ShareLock on transaction 648245 after 8193.139 ms
+2024-11-14 15:09:11.098 UTC [1080] postgres@postgres CONTEXT:  while updating tuple (0,28) in relation "forlocks"
+2024-11-14 15:09:11.098 UTC [1080] postgres@postgres STATEMENT:  update forlocks set value = value + 15 where id in (3);
+2024-11-14 15:09:24.707 UTC [1071] postgres@postgres ERROR:  canceling statement due to user request
+2024-11-14 15:09:24.707 UTC [1071] postgres@postgres CONTEXT:  while updating tuple (0,29) in relation "forlocks"
+2024-11-14 15:09:24.707 UTC [1071] postgres@postgres STATEMENT:  update forlocks set value = value + 5 where id in (2);
+2024-11-14 15:12:18.955 UTC [714] LOG:  checkpoint starting: time
+2024-11-14 15:12:19.322 UTC [714] LOG:  checkpoint complete: wrote 2 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=                                                                                                      0.104 s, sync=0.004 s, total=0.367 s; sync files=2, longest=0.003 s, average=0.002 s; distance=2 kB, estimate=2 kB
+2024-11-14 15:28:57.333 UTC [1076] postgres@postgres WARNING:  there is no transaction in progress
+fedor@pg15:~$ sudo tail -n30 /var/log/postgresql/postgresql-15-main.log
+2024-11-14 15:08:54.337 UTC [1071] postgres@postgres DETAIL:  Process holding the lock: 1080. Wait queue: 1071.
+2024-11-14 15:08:54.337 UTC [1071] postgres@postgres CONTEXT:  while updating tuple (0,29) in relation "forlocks"
+2024-11-14 15:08:54.337 UTC [1071] postgres@postgres STATEMENT:  update forlocks set value = value + 5 where id in (2);
+2024-11-14 15:09:03.105 UTC [1080] postgres@postgres LOG:  process 1080 still waiting for ShareLock on transaction 648245 after 200.734                                                                                                       ms
+2024-11-14 15:09:03.105 UTC [1080] postgres@postgres DETAIL:  Process holding the lock: 1076. Wait queue: 1080.
+2024-11-14 15:09:03.105 UTC [1080] postgres@postgres CONTEXT:  while updating tuple (0,28) in relation "forlocks"
+2024-11-14 15:09:03.105 UTC [1080] postgres@postgres STATEMENT:  update forlocks set value = value + 15 where id in (3);
+2024-11-14 15:09:11.097 UTC [1076] postgres@postgres LOG:  process 1076 detected deadlock while waiting for ShareLock on transaction 64                                                                                                      8243 after 200.611 ms
+2024-11-14 15:09:11.097 UTC [1076] postgres@postgres DETAIL:  Process holding the lock: 1071. Wait queue: .
+2024-11-14 15:09:11.097 UTC [1076] postgres@postgres CONTEXT:  while updating tuple (0,25) in relation "forlocks"
+2024-11-14 15:09:11.097 UTC [1076] postgres@postgres STATEMENT:  update forlocks set value = value + 20 where id in (1);
+2024-11-14 15:09:11.097 UTC [1076] postgres@postgres ERROR:  deadlock detected
+2024-11-14 15:09:11.097 UTC [1076] postgres@postgres DETAIL:  Process 1076 waits for ShareLock on transaction 648243; blocked by proces                                                                                                      s 1071.
+```
+
+## Блокировка  без условия where возможны (задание *), если обновлять в двух транзакциях одно и то же поле. Столбец бцдет обновляться полность так,  как обновление будет проводиться без условия where и сследовательно наложиться эксклюзивная блокировка на всю таблицу.
+
+8) Пересоздал таблицу с идентификатором поля и числовым значением и попробовал обновить весь столбец числового поля в открытой транзакции не завершаяя её и во второй сесии выполнить тоже самое.
 
 первая сессия
 ```
@@ -118,7 +213,6 @@ UPDATE 3
 postgres=*# commit;
 COMMIT
 ```
-
 вторая сессия
 ```
 postgres=# update forlocks set value = value + 10;
@@ -134,7 +228,6 @@ postgres=# select * from forlocks;
 postgres=#
 
 ```
-
 в третьей сесиии смотрел блокировку
 ```
 postgres=# select * from pg_locks;
@@ -154,8 +247,7 @@ postgres=# select * from pg_locks;
 
 postgres=#
 ```
-
-7) В итоге, в журнале зарегистрирована блокировка на уровне всей таблицы где 827й pid блокировал 861го..
+9) В итоге, в журнале зарегистрирована блокировка на уровне всей таблицы где 827й pid блокировал 861го..
 ```
 fedor@pg15:~$ sudo tail -n10 /var/log/postgresql/postgresql-15-main.log
 2024-11-13 16:01:46.597 UTC [861] postgres@postgres DETAIL:  Process holding the lock: 827. Wait queue: 861.
