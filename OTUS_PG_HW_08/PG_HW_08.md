@@ -100,3 +100,4 @@ postgres=# SELECT pg_wal_lsn_diff('3/8DD7D6D8', '3/A3B2FD50');
       -366683768
 (1 row)
 ```
+
