@@ -102,7 +102,7 @@ postgres=# SELECT pg_wal_lsn_diff('3/D5FB2148', '3/BF7944B8');
 2024-11-30 05:47:22.054 UTC [1593] LOG:  checkpoint starting: time
 2024-11-30 05:47:52.071 UTC [1593] LOG:  checkpoint starting: time
 и т.д.
-Наблюдаем завершение контрольной точки до начала следующей в пределах 3 сек., поскольку выставлено ограничение checkpoint_completion_target = 0.9 (на запись давать максимум 90% от checkpoint_timeout).
+Наблюдаем завершение контрольной точки до начала следующей в пределах 3 сек., поскольку выставлено ограничение checkpoint_completion_target = 0.9 (на запись давать максимум 90% от checkpoint_timeout). С учетом постоянной интенсивности работы нагрузочного теста заполнение журнала записью  контрольных точек должно осуществляться примерно равными порциями за счет ограничений по времени записи.
 ```
 fedor@pg15:~$ tail -n 10 /var/log/postgresql/postgresql-15-main.log
 2024-11-30 05:46:52.073 UTC [1593] LOG:  checkpoint starting: time
@@ -119,7 +119,150 @@ fedor@pg15:~$
 ```
 В среднем на точну (на физическом уровне) вышло 4 файла по 16мб на 20 точек = 3,27мб
 
-6) Проверка в асинхронном режиме. Перенастроил сервер на ассинхронный режим и провел идеинтичный нагрузочный тест.
+## Проверка в асинхронном режиме.
+6) Перенастроил сервер на ассинхронный режим (указав в файле настроек synchronous_commit = off) и провел идеинтичный нагрузочный тест.
 ```
+fedor@pg15:/etc/postgresql/15/main$ tail -n 1 /etc/postgresql/15/main/postgresql.conf
+synchronous_commit = off
+fedor@pg15:~$ sudo systemctl restart postgresql@15-main
+[sudo] password for fedor:
+fedor@pg15:~$ su postgres
+Password:
+postgres@pg15:/home/fedor$ pgbench -T 600 loadtest_wal
+pgbench (15.8 (Ubuntu 15.8-1.pgdg22.04+1))
+starting vacuum...end.
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 1
+query mode: simple
+number of clients: 1
+number of threads: 1
+maximum number of tries: 1
+duration: 600 s
+number of transactions actually processed: 1025434
+number of failed transactions: 0 (0.000%)
+latency average = 0.585 ms
+initial connection time = 2.361 ms
+tps = 1709.062270 (without initial connection time)
+```
+Сравниваем оба режима.
+синхронный - tps = 358.354436
+асинхронный - tps = 1709.062270
+Выводы: В асинхронном режиме tps выше, поскольку отсутсвует ожидание подтверждения записи WAL на диск.
+
+## Повреждение данных таблицы в кластере с включенной контрольной суммой страниц.
+7) Остановил кластер, удилил содержимое кластера main и взамен создал новый кластер с контрольной суммой страниц. далее стартанул службу СУБД.
+```
+postgres@pg15:/usr/lib/postgresql/15/bin$ /usr/lib/postgresql/15/bin/initdb -D /var/lib/postgresql/15/main --data-checksums
+The files belonging to this database system will be owned by user "postgres".
+This user must also own the server process.
+
+The database cluster will be initialized with locale "C.UTF-8".
+The default database encoding has accordingly been set to "UTF8".
+The default text search configuration will be set to "english".
+
+Data page checksums are enabled.
+
+fixing permissions on existing directory /var/lib/postgresql/15/main ... ok
+creating subdirectories ... ok
+selecting dynamic shared memory implementation ... posix
+selecting default max_connections ... 100
+selecting default shared_buffers ... 128MB
+selecting default time zone ... Etc/UTC
+creating configuration files ... ok
+running bootstrap script ... ok
+performing post-bootstrap initialization ... ok
+syncing data to disk ... ok
+
+initdb: warning: enabling "trust" authentication for local connections
+initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+
+Success. You can now start the database server using:
+
+    /usr/lib/postgresql/15/bin/pg_ctl -D /var/lib/postgresql/15/main -l logfile start
+
+postgres@pg15:/usr/lib/postgresql/15/bin$ exit
+exit
+fedor@pg15:/usr/lib/postgresql/15/bin$ sudo systemctl start postgresql@15-main
+fedor@pg15:/usr/lib/postgresql/15/bin$ su postgres
+Password:
+postgres@pg15:/usr/lib/postgresql/15/bin$ psql
+psql (15.8 (Ubuntu 15.8-1.pgdg22.04+1))
+Type "help" for help.
+
+postgres=# \l
+                                             List of databases
+   Name    |  Owner   | Encoding | Collate |  Ctype  | ICU Locale | Locale Provider |   Access privileges
+-----------+----------+----------+---------+---------+------------+-----------------+-----------------------
+ postgres  | postgres | UTF8     | C.UTF-8 | C.UTF-8 |            | libc            |
+ template0 | postgres | UTF8     | C.UTF-8 | C.UTF-8 |            | libc            | =c/postgres          +
+           |          |          |         |         |            |                 | postgres=CTc/postgres
+ template1 | postgres | UTF8     | C.UTF-8 | C.UTF-8 |            | libc            | =c/postgres          +
+           |          |          |         |         |            |                 | postgres=CTc/postgres
+(3 rows)
+
 ```
 
+8) Подготовил таблицу
+```
+postgres=# create table test (id int, text varchar(5));
+CREATE TABLE
+postgres=# insert into test select 1, 'text1';
+INSERT 0 1
+postgres=# SELECT oid FROM pg_class WHERE relname = 'test';
+  oid
+-------
+ 16400
+(1 row)
+```
+
+9) останови СУБД и изменил байты в файле таблице 16400 (изменил первые 4 символа на "edit").
+
+![2](https://github.com/user-attachments/assets/b3170f2b-7913-4c6a-88e1-2b4fadf85ce5)
+
+10) Стартанул СУБД и проверил содержимое таблицы.
+```
+fedor@pg15:/usr/lib/postgresql/15/bin$ sudo systemctl start postgresql@15-main
+fedor@pg15:/usr/lib/postgresql/15/bin$ su postgres
+Password:
+postgres@pg15:/usr/lib/postgresql/15/bin$ psql
+psql (15.8 (Ubuntu 15.8-1.pgdg22.04+1))
+Type "help" for help.
+
+postgres=# select * from test;
+ERROR:  invalid page in block 0 of relation base/5/16400
+postgres=#
+```
+
+11) Для избегания ошибки включил параметр zero_damaged_pages
+```
+postgres=# SET zero_damaged_pages = on;
+SET
+postgres=# select * from test;
+WARNING:  invalid page in block 0 of relation base/5/16400; zeroing out page
+ id | text
+----+------
+(0 rows)
+
+postgres=#
+
+```
+После перезагрузки psql выборка таблицы выполнилась уже без предупреждения и можно было добавить в таблицу строку.
+```
+postgres=# \q
+postgres@pg15:/usr/lib/postgresql/15/bin$ psql
+psql (15.8 (Ubuntu 15.8-1.pgdg22.04+1))
+Type "help" for help.
+
+postgres=# select * from test;
+ id | text
+----+------
+(0 rows)
+
+postgres=# insert into test select 1, 'text1';
+INSERT 0 1
+postgres=# select * from test;
+ id | text
+----+-------
+  1 | text1
+(1 row)
+```
