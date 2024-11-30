@@ -54,29 +54,37 @@ postgres=#
 ```
 кооментарий - PK индекс (Index Scan using pgotus_pkey) нашел искомое значение за 6 преходов по страницам (Buffers: shared hit=6) и с затратами времени в пределах 12 миллисекунд (actual time=0.012...) хотя изначально планировал выполнить 24 перехода и отработать за 17 миллисекунд.
 
-3) Оценил выборку по текстовому полю без индекса. Далее создал индекс для полнотекстового поиска и проверил производительность.
+3) Для полнотекстового поиска объеденил столбцы state,item в новый столбец с преобразованием их в тип tsvector по которому будем выполнять полнотекстовый поиск.   
+```
+ALTER TABLE public.index_test ADD "state_item" tsvector;
+ALTER TABLE
+postgres=# UPDATE public.index_test SET state_item = to_tsvector(state || '. ' || item) WHERE state_item IS NULL;
+UPDATE 50000
+
+postgres=# SELECT * FROM public.index_test where item like ('%48888') limit 1;
+  id   | fk_id |   state   |  amount  |      item      |          created_at           |        state_item
+-------+-------+-----------+----------+----------------+-------------------------------+--------------------------
+ 48888 | 48888 | otus48888 | 14814.55 | item_otus48888 | 2024-11-30 13:12:49.244826+00 | 'item':2 'otus48888':1,3
+(1 row)
+```
+
+Оцениваем поиск без индекса.
 ```
 postgres=# explain (analyze, buffers)
-select * from public.index_test where item like 'item_otus49999' limit 1;
-                                                  QUERY PLAN
-
-------------------------------------------------------------------------------------------------------
---------
- Limit  (cost=0.00..231.40 rows=1 width=54) (actual time=5.108..5.108 rows=1 loops=1)
-   Buffers: shared hit=532
-   ->  Seq Scan on index_test  (cost=0.00..1157.00 rows=5 width=54) (actual time=5.107..5.107 rows=1 l
-oops=1)
-         Filter: (item ~~ 'item_otus49999'::text)
-         Rows Removed by Filter: 49998
-         Buffers: shared hit=532
- Planning Time: 221.430 ms
- Execution Time: 5.123 ms
-(8 rows)
-
-postgres=#
+SELECT state_item FROM public.index_test WHERE state_item @@ to_tsquery('49999');
 
 ```
+CREATE INDEX idx_gin_index_test ON public.index_test USING gin (state_item);
 кооментарий - 
+
+
+
+
+
+
+
+
+
 
 4) Оценил выборку по числовому полю без индекса. Далее создал индекс на часть данного поля и проверил производительность.
 ```
