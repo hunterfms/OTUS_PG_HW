@@ -54,37 +54,66 @@ postgres=#
 ```
 кооментарий - PK индекс (Index Scan using pgotus_pkey) нашел искомое значение за 6 преходов по страницам (Buffers: shared hit=6) и с затратами времени в пределах 12 миллисекунд (actual time=0.012...) хотя изначально планировал выполнить 24 перехода и отработать за 17 миллисекунд.
 
-3) Для полнотекстового поиска объеденил столбцы state,item в новый столбец с преобразованием их в тип tsvector по которому будем выполнять полнотекстовый поиск.   
+3) Для полнотекстового поиска объеденил столбец state с тексовм в новый столбец state_description с типом tsvector по которому будем выполнять полнотекстовый поиск. Далее проверил состав данных и сделал выборку по данному полю, что бы оценить производительность без индекса.
 ```
-ALTER TABLE public.index_test ADD "state_item" tsvector;
+postgres=# ALTER TABLE public.index_test ADD "state_description" tsvector;
 ALTER TABLE
-postgres=# UPDATE public.index_test SET state_item = to_tsvector(state || '. ' || item) WHERE state_item IS NULL;
+postgres=# UPDATE public.index_test SET state_description = to_tsvector(state||'Description state collumn') WHERE state_description IS NULL;
 UPDATE 50000
+postgres=# select * from  public.index_test limit 3;                                                                                id | fk_id | state | amount |    item    |          created_at           |             state_description
+----+-------+-------+--------+------------+-------------------------------+--------------------------------------------
+  7 |     7 | otus7 |   2.12 | item_otus7 | 2024-12-02 11:43:21.17049+06  | 'collumn':3 'otus7description':1 'state':2
+  8 |     8 | otus8 |   2.42 | item_otus8 | 2024-12-02 11:43:21.170493+06 | 'collumn':3 'otus8description':1 'state':2
+  9 |     9 | otus9 |   2.73 | item_otus9 | 2024-12-02 11:43:21.170496+06 | 'collumn':3 'otus9description':1 'state':2
+(3 строки)
 
-postgres=# SELECT * FROM public.index_test where item like ('%48888') limit 1;
-  id   | fk_id |   state   |  amount  |      item      |          created_at           |        state_item
--------+-------+-----------+----------+----------------+-------------------------------+--------------------------
- 48888 | 48888 | otus48888 | 14814.55 | item_otus48888 | 2024-11-30 13:12:49.244826+00 | 'item':2 'otus48888':1,3
-(1 row)
+postgres=# select * from public.index_test where state_description @@ to_tsquery('otus48888description');
+  id   | fk_id |   state   |  amount  |      item      |          created_at          |               state_description
+-------+-------+-----------+----------+----------------+------------------------------+------------------------------------------------
+ 48888 | 48888 | otus48888 | 14814.55 | item_otus48888 | 2024-12-02 11:43:21.34484+06 | 'collumn':3 'otus48888description':1 'state':2
+(1 строка)
+
+postgres=# explain (analyze, buffers) select * from public.index_test where state_description @@ to_tsquery('otus48888description');
+                                                          QUERY PLAN
+------------------------------------------------------------------------------------------------------------------------------
+ Gather  (cost=1000.00..10609.59 rows=250 width=116) (actual time=140.027..142.613 rows=1 loops=1)
+   Workers Planned: 1
+   Workers Launched: 1
+   Buffers: shared hit=2009
+   ->  Parallel Seq Scan on index_test  (cost=0.00..9584.59 rows=147 width=116) (actual time=131.953..133.423 rows=0 loops=2)
+         Filter: (state_description @@ to_tsquery('otus48888description'::text))
+         Rows Removed by Filter: 25000
+         Buffers: shared hit=2009
+ Planning Time: 0.977 ms
+ Execution Time: 142.638 ms
+(10 строк)
 ```
+Далее создал индекс для поля state_description и оценил результат полнотекстового поиска на производительность.
 
-Оцениваем поиск без индекса.
+Без индекса производительность составила actual time=140.027..142.613
+
+С индексовм производительность составила наиболее скорый результат actual time=0.040..0.041
 ```
-postgres=# explain (analyze, buffers)
-SELECT state_item FROM public.index_test WHERE state_item @@ to_tsquery('49999');
+postgres=# create index index_statedescr on public.index_test using gin(state_description);
+CREATE INDEX
 
+postgres=# explain (analyze, buffers) select * from public.index_test where state_description @@ to_tsquery('otus48888description');
+                                                         QUERY PLAN
+----------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on index_test  (cost=18.19..773.49 rows=250 width=116) (actual time=0.040..0.041 rows=1 loops=1)
+   Recheck Cond: (state_description @@ to_tsquery('otus48888description'::text))
+   Heap Blocks: exact=1
+   Buffers: shared hit=5
+   ->  Bitmap Index Scan on index_statedescr  (cost=0.00..18.12 rows=250 width=0) (actual time=0.035..0.035 rows=1 loops=1)
+         Index Cond: (state_description @@ to_tsquery('otus48888description'::text))
+         Buffers: shared hit=4
+ Planning Time: 7.997 ms
+ Execution Time: 0.224 ms
+(9 строк)
+
+postgres=#
 ```
-CREATE INDEX idx_gin_index_test ON public.index_test USING gin (state_item);
-кооментарий - 
-
-
-
-
-
-
-
-
-
+кооментарий - Полнотекстовый поиск весьма производителен, но требует большего пространстыва на диске поскольку преобразует данные в более емкуюю структуру. Хранить данные в таком типе выгодно будет не полностью книги, а скорее заголовки и общее описание с ключевыми словами поиска. Впечатлил метод поиска по корням слов и уклада с учетом регионального аспекта текста.
 
 4) Оценил выборку по числовому полю без индекса. Далее создал индекс на часть данного поля и проверил производительность.
 ```
