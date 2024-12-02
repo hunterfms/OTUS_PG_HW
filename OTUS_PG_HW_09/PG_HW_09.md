@@ -90,9 +90,7 @@ postgres=# explain (analyze, buffers) select * from public.index_test where stat
 ```
 Далее создал индекс для поля state_description и оценил результат полнотекстового поиска на производительность.
 
-Без индекса производительность составила actual time=140.027..142.613
-
-С индексовм производительность составила наиболее скорый результат actual time=0.040..0.041
+Без индекса производительность составила actual time=140.027..142.613, с с индексом производительность составила наиболее скорый результат actual time=0.040..0.041
 ```
 postgres=# create index index_statedescr on public.index_test using gin(state_description);
 CREATE INDEX
@@ -115,49 +113,128 @@ postgres=#
 ```
 кооментарий - Полнотекстовый поиск весьма производителен с индексом, но требует большего пространства на диске. Хранить данные в таком типе выгодно будет не полностью книги, а скорее заголовки и общее описание с ключевыми словами поиска. Впечатлил метод поиска по корням слов и уклада с учетом регионального аспекта текста.
 
-4) Оценил выборку по числовому полю без индекса. Далее создал индекс на часть данного поля и проверил производительность.
+4) Оценил выборку по числовому полю fk_id без индекса. Проверил производительность без индекса.
 ```
 postgres=# explain (analyze, buffers)
 select * from public.index_test where fk_id = 49999 limit 1;
                                                   QUERY PLAN
 
-------------------------------------------------------------------------------------------------------
---------
- Limit  (cost=0.00..1157.00 rows=1 width=54) (actual time=3.537..3.537 rows=1 loops=1)
-   Buffers: shared hit=532
-   ->  Seq Scan on index_test  (cost=0.00..1157.00 rows=1 width=54) (actual time=3.536..3.536 rows=1 l
+--------------------------------------------------------------------------------
+-------------------------------
+ Limit  (cost=0.00..2084.00 rows=1 width=116) (actual time=4.650..4.650 rows=1 l
 oops=1)
+   Buffers: shared hit=1459
+   ->  Seq Scan on index_test  (cost=0.00..2084.00 rows=1 width=116) (actual tim
+e=4.649..4.649 rows=1 loops=1)
          Filter: (fk_id = 49999)
          Rows Removed by Filter: 49998
-         Buffers: shared hit=532
- Planning Time: 0.041 ms
- Execution Time: 3.547 ms
+         Buffers: shared hit=1459
+ Planning:
+   Buffers: shared hit=111
+ Planning Time: 0.328 ms
+ Execution Time: 4.753 ms
+(10 rows)
+
+postgres=#
+```
+Создал индекс на чать таблицы fk_id более, или равно 35000 и проверил прирост прозводительности при выборке с индексом.
+
+Без индекса отработка заняла actual time=4.650..4.650, а с индексом actual time=0.033..0.033, что значительнее быстрее.
+```
+postgres=# CREATE INDEX index_fk_id ON public.index_test (fk_id) WHERE fk_id >=35000;                             CREATE INDEX
+postgres=# explain (analyze, buffers)
+select * from public.index_test where fk_id = 49999 limit 1;
+                                                           QUERY PLAN
+
+------------------------------------------------------------------------------------------------------------------
+--------------
+ Limit  (cost=0.29..8.30 rows=1 width=116) (actual time=0.033..0.033 rows=1 loops=1)
+   Buffers: shared hit=4 read=2
+   ->  Index Scan using index_fk_id on index_test  (cost=0.29..8.30 rows=1 width=116) (actual time=0.032..0.032 ro
+ws=1 loops=1)
+         Index Cond: (fk_id = 49999)
+         Buffers: shared hit=4 read=2
+ Planning:
+   Buffers: shared hit=32 read=2 dirtied=2
+ Planning Time: 26.731 ms
+ Execution Time: 0.044 ms
+(9 rows)
+
+postgres=#
+
+```
+Дополнитльно выбрал данные из поля fk_id менее 35000, что бы удостовериться в неактуальности индекса для такой выборки. В итоге оптимизатор принял решение провести полное сканирование таблицы до искомого значения и поэтому время составило actual time=2.282..2.282
+```
+postgres=# explain (analyze, buffers)
+select * from public.index_test where fk_id = 25000 limit 1;
+                                                  QUERY PLAN
+---------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.00..2084.00 rows=1 width=116) (actual time=2.283..2.283 rows=1 loops=1)
+   Buffers: shared hit=987
+   ->  Seq Scan on index_test  (cost=0.00..2084.00 rows=1 width=116) (actual time=2.282..2.282 rows=1 loops=1)
+         Filter: (fk_id = 25000)
+         Rows Removed by Filter: 24999
+         Buffers: shared hit=987
+ Planning Time: 0.050 ms
+ Execution Time: 2.294 ms
 (8 rows)
 
 postgres=#
 
 ```
-кооментарий - 
+кооментарий - Индекс на часть таблицы занимает более меньший объем на диске и скорее необходим, если не используется секционирование таблицы, поскольку сам применяется оптимизатором только в определенном диапазоне данных.
 
 5) Оценил выборку по числовому + текстовому полю без индекса. Создал составной индекс на два поля и проверил производительность.
 ```
 postgres=# explain (analyze, buffers) select * from public.index_test where amount = 15151.21 and state like 'otus49%' limit 1;
                                                   QUERY PLAN
-
-------------------------------------------------------------------------------------------------------
---------
- Limit  (cost=0.00..1282.00 rows=1 width=54) (actual time=4.617..4.618 rows=1 loops=1)
-   Buffers: shared hit=532
-   ->  Seq Scan on index_test  (cost=0.00..1282.00 rows=1 width=54) (actual time=4.616..4.616 rows=1 l
-oops=1)
+---------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.00..2209.00 rows=1 width=116) (actual time=4.743..4.744 rows=1 loops=1)
+   Buffers: shared hit=1459
+   ->  Seq Scan on index_test  (cost=0.00..2209.00 rows=1 width=116) (actual time=4.741..4.742 rows=1 loops=1)
          Filter: ((state ~~ 'otus49%'::text) AND (amount = 15151.21))
          Rows Removed by Filter: 49998
-         Buffers: shared hit=532
- Planning Time: 0.065 ms
- Execution Time: 4.628 ms
-(8 rows)
+         Buffers: shared hit=1459
+ Planning:
+   Buffers: shared hit=5 read=1
+ Planning Time: 226.715 ms
+ Execution Time: 4.758 ms
+(10 rows)
 
 postgres=#
-
 ```
-кооментарий - 
+6) Создал составной индекс для полей условия выборки amount + state. Проверил производительность с индексом.
+```
+postgres=# CREATE INDEX index_amount_state ON public.index_test (amount, state);
+CREATE INDEX
+postgres=# explain (analyze, buffers) select * from public.index_test where amount = 15151.21 and state like 'otus49%' limit 1;
+                                                              QUERY PLAN
+
+------------------------------------------------------------------------------------------------------------------
+---------------------
+ Limit  (cost=0.29..8.31 rows=1 width=116) (actual time=0.030..0.031 rows=1 loops=1)
+   Buffers: shared hit=1 read=2
+   ->  Index Scan using index_amount_state on index_test  (cost=0.29..8.31 rows=1 width=116) (actual time=0.029..0
+.029 rows=1 loops=1)
+         Index Cond: (amount = 15151.21)
+         Filter: (state ~~ 'otus49%'::text)
+         Buffers: shared hit=1 read=2
+ Planning:
+   Buffers: shared hit=24 read=5 dirtied=3
+ Planning Time: 2.177 ms
+ Execution Time: 0.045 ms
+(10 rows)
+
+postgres=#
+```
+В итоге оптимизатор принял решение использовать составной индекс и поэтому время отработки составило actual time=2.282..2.282
+
+7) Комментарии к индексам.
+```
+postgres=# COMMENT ON INDEX index_statedescr IS 'Индекс для полнотекстового поиска комментариев к state';
+COMMENT ON INDEX index_fk_id  IS 'Индекс по диапозону значений поля fk_id более, или равно 35000';
+COMMENT ON INDEX index_amount_state  IS 'Индекс составной для поиска значений по полям amount state';
+COMMENT
+COMMENT
+COMMENT
+```
