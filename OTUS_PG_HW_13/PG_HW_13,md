@@ -15,5 +15,5 @@ CREATE SCHEMA
 postgres=# SET search_path = pract_functions, publ
 postgres-# 
 ```
-2) c
+2) cс
 
