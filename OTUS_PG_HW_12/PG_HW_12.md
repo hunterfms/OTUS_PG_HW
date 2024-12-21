@@ -21,7 +21,7 @@ postgres=# select * from test limit 2;
 
 postgres=#
 ```
-3) Добавил на PG2 таблицу для записи test2 и для чтения test. Заполнил test2 случайными 10ю знпчениями.
+3) Добавил на PG2 таблицу для записи test2 и для чтения test. Заполнил test2 случайными 10ю значениями.
 ```
 postgres=# create table test (id int, fio varchar(20));
 CREATE TABLE
