@@ -1,1 +1,18 @@
+# ДЗ на тему - Функции и процедуры (триггеры, поддержка заполнения витрин)
+1) На машине PG15 отработал файл структуры проекта ветрин.
+```
+postgres@pg15:/home/fedor$ psql
+could not change directory to "/home/fedor": Permission denied
+psql (15.8 (Ubuntu 15.8-1.pgdg22.04+1))
+Type "help" for help.
+
+postgres=# DROP SCHEMA IF EXISTS pract_functions CASCADE;
+CREATE SCHEMA pract_functions;
+NOTICE:  schema "pract_functions" does not exist, skipping
+DROP SCHEMA
+CREATE SCHEMA
+postgres=# SET search_path = pract_functions, publ
+postgres-# 
+```
+2) c
 
