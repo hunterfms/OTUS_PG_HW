@@ -1,7 +1,8 @@
 ## Дипломная работа по теме - Оптимизация запросов. 
 
-Восстанавливаем на виртуальной машине PG15 DataSet "Employees database" с общим количеством строк в таблицах 3919015, с ресурса: https://raw.githubusercontent.com/neondatabase/postgres-sample-dbs/main/employees.sql.gz
+# Цель: Разработать и в дальнейшем оптимизировать запросы с таблиц большого размера, для наиболее быстрой выдачи их результатов и наименьшего использования ими ресурсов сервера.  Оптимизация должна затронуть сам код запроса и структуру базы.
 
+Восстанавливаем на виртуальной машине PG15 DataSet "Employees database" с общим количеством строк в таблицах 3919015, с ресурса: https://raw.githubusercontent.com/neondatabase/postgres-sample-dbs/main/employees.sql.gz
 1) Подготавил базу employees и схему employees для проекта.  Далее скачал архив dataset-а, дал доступ postgres на каталог с фалом и восстановил его в базу employees через pg_restore.
 ```
 postgres=# CREATE DATABASE employees;
@@ -79,4 +80,6 @@ employees=# select count(*) from employees.title;
 (1 row)
 ```
 3) Очищаем структуру таблиц оставляя только ключи.
-4)  
+4) Выдаем информацию по текущей структуре таблиц.
+5) отрабатываем запросы с параметром explane
+
