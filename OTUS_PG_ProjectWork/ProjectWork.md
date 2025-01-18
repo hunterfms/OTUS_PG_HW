@@ -1,6 +1,6 @@
 # Дипломная работа по теме - Оптимизация запросов. 
 
-## Цель: Разработать и в дальнейшем оптимизировать запросы с таблиц большого размера, для наиболее быстрой выдачи их результатов и наименьшего использования ими ресурсов сервера.  Оптимизация должна затронуть сам код запроса и структуру базы.
+## Цель: Разработать и в дальнейшем оптимизировать запрос с таблиц большого размера, для наиболее быстрой выдачи их результатов и наименьшего использования ими ресурсов сервера.  Оптимизация должна затронуть сам код запроса и структуру базы.
 
 Восстанавливаем на виртуальной машине PG15 DataSet "Employees database" с общим количеством строк в таблицах 3919015, с ресурса: https://raw.githubusercontent.com/neondatabase/postgres-sample-dbs/main/employees.sql.gz
 1) Подготавил базу employees и схему employees для проекта.  Далее скачал архив dataset-а, дал доступ postgres на каталог с фалом и восстановил его в базу employees через pg_restore.
@@ -44,45 +44,152 @@ employees=# select * from pg_tables where schemaname = 'employees';
 (6 rows)
 
 employees=# select count(*) from employees.employee;
+select count(*) from employees.department_employee;
+select count(*) from employees.department;
+select count(*) from employees.department_manager;
+select count(*) from employees.salary;
+select count(*) from employees.title;
  count
 --------
  300024
 (1 row)
 
-employees=# select count(*) from employees.department_employee;
  count
 --------
  331603
 (1 row)
 
-employees=# select count(*) from employees.department;
  count
 -------
      9
 (1 row)
 
-employees=# select count(*) from employees.department_manager;
  count
 -------
     24
 (1 row)
 
-employees=# select count(*) from employees.salary;
   count
 ---------
  2844047
 (1 row)
 
-employees=# select count(*) from employees.title;
  count
 --------
  443308
 (1 row)
+
+employees=#
+
 ```
-3) Очищаем структуру таблиц оставляя только ключи.
-4) Выдаем информацию по текущей структуре таблиц.
+3) Очищаем структуру таблиц оставляя только данные. Сначала удаляем все индексы, потом внешние ключи и первичные ключи.
 ```
-\d+ employees.employee
+DO
+$do$
+DECLARE
+   _sql text;
+BEGIN   
+   SELECT 'DROP INDEX ' || string_agg(indexrelid::regclass::text, ', ')
+   FROM   pg_index  i
+   LEFT   JOIN pg_depend d ON d.objid = i.indexrelid
+                          AND d.deptype = 'i'
+   WHERE  i.indrelid = 'employees.employee'::regclass  -- для каждой таблицы в базе
+   AND    d.objid IS NULL                      
+   INTO   _sql;
+   
+   IF _sql IS NOT NULL THEN                    -- только если найдены index(es)
+     EXECUTE _sql;
+   END IF;
+END
+$do$;
+
+-- удаление всех внешних ключей
+ALTER TABLE employees.department_employee DROP CONSTRAINT dept_emp_ibfk_1;
+ALTER TABLE employees.department_manager DROP CONSTRAINT dept_manager_ibfk_1;
+ALTER TABLE employees.salary DROP CONSTRAINT salaries_ibfk_1;
+ALTER TABLE employees.title DROP CONSTRAINT titles_ibfk_1;
+ALTER TABLE employees.department_employee DROP CONSTRAINT dept_emp_ibfk_2;
+ALTER TABLE employees.department_manager DROP CONSTRAINT dept_manager_ibfk_2;
+-- удаление первичных ключей
+ALTER TABLE employees.employee DROP CONSTRAINT idx_16988_primary;
+ALTER TABLE employees.department_employee DROP CONSTRAINT idx_16982_primary;
+ALTER TABLE employees.department DROP CONSTRAINT idx_16979_primary;
+ALTER TABLE employees.department_manager DROP CONSTRAINT idx_16985_primary;
+ALTER TABLE employees.salary DROP CONSTRAINT idx_16991_primary;
+ALTER TABLE employees.title DROP CONSTRAINT idx_16994_primary;
 ```
-6) отрабатываем запросы с параметром explane
+5) Выдаем информацию по текущему состоянию структуры таблиц.
+```
+employees=# \d+ employees.employee
+\d+ employees.department_employee
+\d+ employees.department
+\d+ employees.department_manager
+\d+ employees.salary
+\d+ employees.title
+                                                                      Table "employees.employee"
+   Column   |           Type            | Collation | Nullable |                    Default                     | Storage  | Compression | Stats target | Description
+------------+---------------------------+-----------+----------+------------------------------------------------+----------+-------------+--------------+-------------
+ id         | bigint                    |           | not null | nextval('employees.id_employee_seq'::regclass) | plain    |             |              |
+ birth_date | date                      |           | not null |                                                | plain    |             |              |
+ first_name | character varying(14)     |           | not null |                                                | extended |             |              |
+ last_name  | character varying(16)     |           | not null |                                                | extended |             |              |
+ gender     | employees.employee_gender |           | not null |                                                | plain    |             |              |
+ hire_date  | date                      |           | not null |                                                | plain    |             |              |
+Access method: heap
+
+                                        Table "employees.department_employee"
+    Column     |     Type     | Collation | Nullable | Default | Storage  | Compression | Stats target | Description
+---------------+--------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ employee_id   | bigint       |           | not null |         | plain    |             |              |
+ department_id | character(4) |           | not null |         | extended |             |              |
+ from_date     | date         |           | not null |         | plain    |             |              |
+ to_date       | date         |           | not null |         | plain    |             |              |
+Access method: heap
+
+                                               Table "employees.department"
+  Column   |         Type          | Collation | Nullable | Default | Storage  | Compression | Stats target | Description
+-----------+-----------------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ id        | character(4)          |           | not null |         | extended |             |              |
+ dept_name | character varying(40) |           | not null |         | extended |             |              |
+Access method: heap
+
+                                        Table "employees.department_manager"
+    Column     |     Type     | Collation | Nullable | Default | Storage  | Compression | Stats target | Description
+---------------+--------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ employee_id   | bigint       |           | not null |         | plain    |             |              |
+ department_id | character(4) |           | not null |         | extended |             |              |
+ from_date     | date         |           | not null |         | plain    |             |              |
+ to_date       | date         |           | not null |         | plain    |             |              |
+Access method: heap
+
+                                          Table "employees.salary"
+   Column    |  Type  | Collation | Nullable | Default | Storage | Compression | Stats target | Description
+-------------+--------+-----------+----------+---------+---------+-------------+--------------+-------------
+ employee_id | bigint |           | not null |         | plain   |             |              |
+ amount      | bigint |           | not null |         | plain   |             |              |
+ from_date   | date   |           | not null |         | plain   |             |              |
+ to_date     | date   |           | not null |         | plain   |             |              |
+Access method: heap
+
+                                                  Table "employees.title"
+   Column    |         Type          | Collation | Nullable | Default | Storage  | Compression | Stats target | Description
+-------------+-----------------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ employee_id | bigint                |           | not null |         | plain    |             |              |
+ title       | character varying(50) |           | not null |         | extended |             |              |
+ from_date   | date                  |           | not null |         | plain    |             |              |
+ to_date     | date                  |           |          |         | plain    |             |              |
+Access method: heap
+
+employees=#
+```
+## Разработка запроса
+6) Разрабатывыаем свой запрос в нескольких вариантах, с неоптимальным кодом и скодом по рекомендациям производительности.
+7) Проверка производительности запроса на неоптимизированной структуре базы с актуальным планом explane analyser
+## Доработка структуры базы для запроса.
+8) Дорабатываем структуру базы - создаем структуру ключей под разработанный запрос.
+9) Дорабатываем структуру базы - создаем индексы под разработанный запрос.
+10) ...
+## Проверка производительности 
+11) Проверка производительности запроса на оптимизированной структуре базы с актуальным планом explane analyser
+## Выводы
 
