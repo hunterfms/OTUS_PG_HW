@@ -223,9 +223,45 @@ Access method: heap
 employees=#
 ```
 ## Разработка запросов.
-6) Разрабатывыаем свой запрос в нескольких вариантах, с неоптимальным кодом и скодом по рекомендациям производительности.
-   
-8) Проверка производительности запроса на неоптимизированной структуре базы с актуальным планом explain (analyze, buffers)
+6) Разрабатывыаем свои запрос выборки данных.
+```
+-- Cотрудники компании зарплаты которых на текущий момент меньше прожиточного минимума на 2025г.
+-- Запрос учитывает только актуальных сотрудников, с их актуальными должностями в актуальных департаментах. 
+explain (analyze, buffers)
+select 
+ e2.first_name ||' '|| e2.last_name AS "Имя сотрудника",
+ t2.title AS "Должность",
+ s.amount AS "Зарплата на сегодня в $",
+ 67690 - s.amount AS "Недостаток в $" 
+ from employees.salary as s
+Join employees.employee as e2
+ on s.employee_id = e2.id
+join employees.title as t2
+ on s.employee_id = t2.employee_id 
+  where s.employee_id in  
+(
+select distinct e.id
+ from employees.title as t
+  join employees.employee as e
+   on t.employee_id = e.id
+  join employees.department_employee as de
+   on t.employee_id = de.employee_id
+  join employees.department as d
+   on de.department_id = d.id  
+  where 
+   t.to_date > (select current_date)
+   and de.to_date > (select current_date)
+)  and (s.from_date >= (select max(from_date) from employees.salary)
+        or s.to_date = (select max(to_date) from employees.salary))
+   and s.amount < 67690 -- средний прожиточный минимум в США
+ORDER BY s.employee_id;
+```
+7) Разрабатывыаем свои запрос обновления данных.
+```
+-- Устанавливаем зарплату сотрудникам, у которых она меньше среднего прожиточного минимума, выше этого минимума на 33% от их текущей зарплаты.
+-- Запрос строится на основе условий предыдущего запроса (только актуальные сотрудники, а не уже уволенные).
+```
+9) Проверка производительности запроса на неоптимизированной структуре базы с актуальным планом explain (analyze, buffers)
 ## Доработка структуры таблиц для запроса.
 8) Дорабатываем структуру базы - создаем структуру ключей под разработанный запрос.
 9) Дорабатываем структуру базы - создаем индексы под разработанный запрос.
