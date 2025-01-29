@@ -37,11 +37,6 @@ employees.title – таблица привязки сотрудника к до
 - from_date – дата начала работы сотрудника в должности.
 - to_date – дата окончания работы сотрудника в должности.
 
-## Свои выводы и рекомендации по нормализации данных.
-
-а. Было бы эффективнее упразднить таблицу справочник руководителей подразделений department_manager. Данные этой таблицы хоть и позволяют отслеживать историю смены руководителей но такая история уже есть совокупно в таблицах привязки сотрудника к департаменту с таблицей должностей. Иными словами можно выдать историю смены руководителей отдела связанным запросом, а не занимать под эти «результатирующие данные» диски (сорные данные).
-б. Поле title таблицы employees.title имеет повторяющиеся значения, поэтому целесообразным было бы вынести значения данного поля в отдельный справочник, а в employees.title оставить только id на каждую должность из нового справочника.
-
 ## Приступим к реализации.
 
 1) Подготавил базу employees и схему employees для проекта.  Далее скачал архив dataset-а, дал доступ postgres на каталог с фалом и восстановил его в базу employees через pg_restore.
@@ -294,13 +289,16 @@ and (from_date >= (select max(from_date) from employees.salary)
         or to_date = (select max(to_date) from employees.salary))
 and amount < 67690;
 ```
-9) Создаем резервную копию базы  employees без структуры и восстнавливаем её на этом же сервере под именем employees_2. К защите планирую  восстановить две копии базы, что бы продемонстрировать производительность ДО на одной базе и ПОСЛЕ доработки структуры на другой. Команды следующие: 
+9) Создаем резервную копию базы  employees без структуры и восстнавливаем её на этом же сервере под именем employees_1 и employees_1. К защите планирую  восстановить три копии базы, что бы продемонстрировать производительность ДО на одной базе и ПОСЛЕ доработки структуры на другой и после нормализации структуры на третей базе. Команды следующие: 
 ```
 pg_dump --username=postgres --format=c --create --compress=9 employees > /1_temp/employees_empty.dump
 ...
+postgres=# create database employees_1;
+CREATE DATABASE
 postgres=# create database employees_2;
 CREATE DATABASE
 ...
+pg_restore -U postgres -d employees_1 < /1_temp/employees_empty.dump
 pg_restore -U postgres -d employees_2 < /1_temp/employees_empty.dump
 ```
 11)  Проверка производительности запросов на неоптимизированной структуре базы с актуальным планом explain (analyze)
@@ -530,11 +528,127 @@ and amount < 67690;
 (78 rows)
 employees=#
 ```
-## Доработка структуры таблиц для запроса.
+### Доработка структуры таблиц для запроса.
 8) Дорабатываем структуру базы - создаем структуру ключей под разработанный запрос.
 9) Дорабатываем структуру базы - создаем индексы под разработанный запрос.
 10) ...
-## Проверка производительности запросов после доработки структуры. 
+### Проверка производительности запросов после доработки структуры. 
 11) Проверка производительности запроса на оптимизированной структуре базы с актуальным планом explain (analyze, buffers)
+
+### Выводы и рекомендации по нормализации данных.
+а. Было бы эффективнее упразднить таблицу справочник руководителей подразделений department_manager. Данные этой таблицы хоть и позволяют отслеживать историю смены руководителей но такая история уже есть совокупно в таблицах привязки сотрудника к департаменту с таблицей должностей. Иными словами можно выдать историю смены руководителей отдела связанным запросом, а не занимать под эти «результатирующие данные» диски (сорные данные).
+б. Поле title таблицы employees.title имеет повторяющиеся значения, поэтому целесообразным было бы вынести значения данного поля в отдельный справочник, а в employees.title оставить только id на каждую должность из нового справочника.
+
+12) По пункту "б" создаем таблицу справочник titles для должностей м заполняем её данными.
+```
+-- какие данные будут внесены в справочник должностей
+employees_2=# select distinct title from employees.title;
+       title
+--------------------
+ Assistant Engineer
+ Engineer
+ Manager
+ Senior Engineer
+ Senior Staff
+ Staff
+ Technique Leader
+(7 rows)
+
+-- создаем таблицу справочник и заполняем её
+employees_2=# create table employees.titles (title_id int PRIMARY KEY, title varchar(50) not null);
+CREATE TABLE
+
+employees_2=# INSERT INTO employees.titles (title_id ,title) values (1, 'Assistant Engineer');
+INSERT INTO employees.titles (title_id ,title) values (2, 'Engineer');
+INSERT INTO employees.titles (title_id ,title) values (3, 'Manager');
+INSERT INTO employees.titles (title_id ,title) values (4, 'Senior Engineer');
+INSERT INTO employees.titles (title_id ,title) values (5, 'Senior Staff');
+INSERT INTO employees.titles (title_id ,title) values (6, 'Staff');
+INSERT INTO employees.titles (title_id ,title) values (7, 'Technique Leader');
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+INSERT 0 1
+```
+13) Добавляем в таблицу title поле title_id и заполняем его из titles.
+```
+employees_2=# alter table employees.title ADD COLUMN title_id integer;
+ALTER TABLE
+
+employees_2=# update employees.title set title_id = 1 where title = 'Assistant Engineer';
+update employees.title set title_id = 2 where title = 'Engineer';
+update employees.title set title_id = 3 where title = 'Manager';
+update employees.title set title_id = 4 where title = 'Senior Engineer';
+update employees.title set title_id = 5 where title = 'Senior Staff';
+update employees.title set title_id = 6 where title = 'Staff';
+update employees.title set title_id = 7 where title = 'Technique Leader';
+UPDATE 15128
+UPDATE 115003
+UPDATE 24
+UPDATE 97750
+UPDATE 92853
+UPDATE 107391
+UPDATE 15159
+employees_2=#
+```
+14) Удаляем избыточные данные из таблицы title.
+```
+employees_2=# alter table employees.title DROP COLUMN title;
+ALTER TABLE
+employees_2=# select * from employees.title limit 5;
+ employee_id | from_date  |  to_date   | title_id
+-------------+------------+------------+----------
+       13283 | 1987-09-22 | 1995-09-22 |        2
+       13652 | 1995-01-30 | 9999-01-01 |        2
+       29161 | 1997-08-31 | 9999-01-01 |        2
+       93144 | 1985-12-30 | 1994-12-30 |        2
+       10001 | 1986-06-26 | 9999-01-01 |        4
+(5 rows)
+employees_2=# vacuum full;
+VACUUM
+employees_2=# select * from employees.titles;
+ title_id |       title
+----------+--------------------
+        1 | Assistant Engineer
+        2 | Engineer
+        3 | Manager
+        4 | Senior Engineer
+        5 | Senior Staff
+        6 | Staff
+        7 | Technique Leader
+(7 rows)
+```
+Теперь структура будет занимать меньше места на диске из за смены типов данных vatchar(50) на int в таблице 443 000 записей. Для новой структуры нужно будет доработать наши запросы с учетом изменений.
+```
+employees_2=# \d+ employees.title
+\d+ employees.titles
+                                           Table "employees.title"
+   Column    |  Type   | Collation | Nullable | Default | Storage | Compression | Stats target | Description
+-------------+---------+-----------+----------+---------+---------+-------------+--------------+-------------
+ employee_id | bigint  |           | not null |         | plain   |             |              |
+ from_date   | date    |           | not null |         | plain   |             |              |
+ to_date     | date    |           |          |         | plain   |             |              |
+ title_id    | integer |           |          |         | plain   |             |              |
+Access method: heap
+
+                                                Table "employees.titles"
+  Column  |         Type          | Collation | Nullable | Default | Storage  | Compression | Stats target | Description
+----------+-----------------------+-----------+----------+---------+----------+-------------+--------------+-------------
+ title_id | integer               |           | not null |         | plain    |             |              |
+ title    | character varying(50) |           | not null |         | extended |             |              |
+Indexes:
+    "titles_pkey" PRIMARY KEY, btree (title_id)
+Access method: heap
+
+employees_2=#
+```
+
+Вид доработанных запросов с планами.
+```
+```
+
 ## Выводы
 
