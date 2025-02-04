@@ -1028,11 +1028,149 @@ employees_2=#
 ### Разработка запроса к базе с минимальным результатирующим набором.
 Разрабатываем запрос к базе с минимальным результатирующим набором, для проверки работы оптимизированной структуры БД. Проверять результаты оптмиизации будем на базе employees_2 без индексов и с индексами, где уже проведена работа по нормализации структуры данных в пунктах 12,13,14.
 
-15) Разрабатываем запрос и отрабатываем его на базе без индексов с выводом плана.
+15) Разрабатан запрос.
+```
+-- Выдать по сотруднику с учетом последней должности и департамента - информацию по последней выдаче ему заработной платы.
+-- Поисковые данные по сотруднику вводим в условиях запроса
+
+employees_2=# Select
+ e.first_name AS "Фамилия",
+ e.last_name AS "Имя",
+ d.dept_name AS "Департамент",
+ t.title AS "Должность",
+ s.amount AS "Зарплата $",
+ s.from_date AS "выдана от",
+ s.to_date  AS "выдана до"
+ from employees.employee as e
+join employees.department_employee as de
+ on e.id = de.employee_id
+join employees.department as d
+ on de.department_id = d.id
+join employees.title as t
+ on e.id = t.employee_id
+join employees.salary as s
+ on e.id = s.employee_id
+where
+ e.first_name like 'Almudena'
+and e.last_name like 'Sur%'
+and t.to_date = (select max(to_date) from employees.title)
+and s.to_date = (select max(to_date) from employees.salary);
+ Фамилия  | Имя  |    Департамент     |    Должность    | Зарплата $ | выдана от  | выдана до
+----------+------+--------------------+-----------------+------------+------------+------------
+ Almudena | Sury | Production         | Senior Engineer |      89888 | 2002-02-25 | 9999-01-01
+ Almudena | Sury | Quality Management | Senior Engineer |      89888 | 2002-02-25 | 9999-01-01
+(2 rows)
+```
+
+Выводим актуальный план запроса на базе без нормализации данных (еще нет справочника employees.titles) и индексов, после нескольких выполнений 
+ для сбора статистики, и после Analyse. По итогу  Execution Time: 824.225 ms
+```
+employees_2=# explain (analyze, buffers)
+Select
+ e.first_name AS "Фамилия",
+ e.last_name AS "Имя",
+ d.dept_name AS "Департамент",
+ t.title AS "Должность",
+ s.amount AS "Зарплата $",
+ s.from_date AS "выдана от",
+ s.to_date  AS "выдана до"
+ from employees.employee as e
+join employees.department_employee as de
+ on e.id = de.employee_id
+join employees.department as d
+ on de.department_id = d.id
+join employees.title as t
+ on e.id = t.employee_id
+join employees.salary as s
+ on e.id = s.employee_id
+where
+ e.first_name like 'Almudena'
+and e.last_name like 'Sur%'
+and t.to_date = (select max(to_date) from employees.title)
+and s.to_date = (select max(to_date) from employees.salary);
+                                                                                   QUERY PLAN
+
+------------------------------------------------------------------------------------------------------------------------------------------------------
+---------------------------
+ Nested Loop  (cost=56853.55..89783.40 rows=1 width=54) (actual time=823.968..824.183 rows=2 loops=1)
+   Join Filter: (de.department_id = d.id)
+   Rows Removed by Join Filter: 16
+   Buffers: shared hit=14302 read=33062
+   InitPlan 1 (returns $1)
+     ->  Finalize Aggregate  (cost=6501.11..6501.12 rows=1 width=4) (actual time=69.732..69.811 rows=1 loops=1)
+           Buffers: shared hit=3192
+           ->  Gather  (cost=6500.90..6501.11 rows=2 width=4) (actual time=69.650..69.792 rows=3 loops=1)
+                 Workers Planned: 2
+                 Workers Launched: 2
+                 Buffers: shared hit=3192
+                 ->  Partial Aggregate  (cost=5500.90..5500.91 rows=1 width=4) (actual time=64.098..64.099 rows=1 loops=3)
+                       Buffers: shared hit=3192
+                       ->  Parallel Seq Scan on title  (cost=0.00..5039.12 rows=184712 width=4) (actual time=0.005..18.802 rows=147769 loops=3)
+                             Buffers: shared hit=3192
+   InitPlan 2 (returns $3)
+     ->  Finalize Aggregate  (cost=33927.96..33927.97 rows=1 width=4) (actual time=390.929..390.952 rows=1 loops=1)
+           Buffers: shared hit=1536 read=16579
+           ->  Gather  (cost=33927.75..33927.96 rows=2 width=4) (actual time=390.924..390.949 rows=3 loops=1)
+                 Workers Planned: 2
+                 Workers Launched: 2
+                 Buffers: shared hit=1536 read=16579
+                 ->  Partial Aggregate  (cost=32927.75..32927.76 rows=1 width=4) (actual time=378.633..378.634 rows=1 loops=3)
+                       Buffers: shared hit=1536 read=16579
+                       ->  Parallel Seq Scan on salary  (cost=0.00..29965.20 rows=1185020 width=4) (actual time=0.035..224.678 rows=948016 loops=3)
+                             Buffers: shared hit=1536 read=16579
+   ->  Gather  (cost=16424.46..49353.10 rows=1 width=47) (actual time=823.943..824.051 rows=2 loops=1)
+         Workers Planned: 2
+         Params Evaluated: $1, $3
+         Workers Launched: 2
+         Buffers: shared hit=14300 read=33062
+         ->  Parallel Hash Join  (cost=15424.46..48353.00 rows=1 width=47) (actual time=346.498..348.235 rows=1 loops=3)
+               Hash Cond: (s.employee_id = e.id)
+               Buffers: shared hit=9572 read=16483
+               ->  Parallel Seq Scan on salary s  (cost=0.00..32927.74 rows=209 width=24) (actual time=0.037..214.114 rows=80041 loops=3)
+                     Filter: (to_date = $3)
+                     Rows Removed by Filter: 867974
+                     Buffers: shared hit=1632 read=16483
+               ->  Parallel Hash  (cost=15424.45..15424.45 rows=1 width=55) (actual time=120.864..120.867 rows=1 loops=3)
+                     Buckets: 1024  Batches: 1  Memory Usage: 40kB
+                     Buffers: shared hit=7786
+                     ->  Parallel Hash Join  (cost=9923.39..15424.45 rows=1 width=55) (actual time=120.334..120.817 rows=1 loops=3)
+                           Hash Cond: (t.employee_id = e.id)
+                           Buffers: shared hit=7786
+                           ->  Parallel Seq Scan on title t  (cost=0.00..5500.90 rows=41 width=19) (actual time=0.012..27.787 rows=80041 loops=3)
+                                 Filter: (to_date = $1)
+                                 Rows Removed by Filter: 67728
+                                 Buffers: shared hit=3192
+                           ->  Parallel Hash  (cost=9923.38..9923.38 rows=1 width=36) (actual time=62.536..62.538 rows=1 loops=3)
+                                 Buckets: 1024  Batches: 1  Memory Usage: 40kB
+                                 Buffers: shared hit=4594
+                                 ->  Parallel Hash Join  (cost=5128.28..9923.38 rows=1 width=36) (actual time=62.127..62.491 rows=1 loops=3)
+                                       Hash Cond: (de.employee_id = e.id)
+                                       Buffers: shared hit=4594
+                                       ->  Parallel Seq Scan on department_employee de  (cost=0.00..4063.61 rows=195061 width=13) (actual time=0.010..
+6.803 rows=110534 loops=3)
+                                             Buffers: shared hit=2113
+                                       ->  Parallel Hash  (cost=5128.27..5128.27 rows=1 width=23) (actual time=17.550..17.551 rows=0 loops=3)
+                                             Buckets: 1024  Batches: 1  Memory Usage: 40kB
+                                             Buffers: shared hit=2481
+                                             ->  Parallel Seq Scan on employee e  (cost=0.00..5128.27 rows=1 width=23) (actual time=17.293..17.511 row
+s=0 loops=3)
+                                                   Filter: (((first_name)::text ~~ 'Almudena'::text) AND ((last_name)::text ~~ 'Sur%'::text))
+                                                   Rows Removed by Filter: 100008
+                                                   Buffers: shared hit=2481
+   ->  Seq Scan on department d  (cost=0.00..1.09 rows=9 width=17) (actual time=0.010..0.011 rows=9 loops=2)
+         Buffers: shared hit=2
+ Planning Time: 0.482 ms
+ Execution Time: 824.225 ms
+(67 rows)
+
+employees_2=#
+```
+16) Применяем доработку структуры базы которая описана в пунктах 12, 13, 14 (создание отдельного справочника employees.titles). Далее разрабатываем структуру индексов под запрос с учетом нового справочнка.  
 ```
 ```
-16) Отрабатываем запрос на базе синдексами и выводом плана после применения ANALYSE;.
+17) Отрабатываем запрос на оптимизированной структуре данных с выводом плана, после нескольких его отработок для сбора статистики и применения ANALYSE;.
 ```
+
 ```
 Выводы по результатам: 
 
