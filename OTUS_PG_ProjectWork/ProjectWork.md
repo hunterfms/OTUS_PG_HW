@@ -923,30 +923,29 @@ loyee_id)
 employees_2=# analyse;
 ANALYZE
 employees_2=# explain (analyze, buffers)
-Select        explain (analyze, buffers)
-Select t_name AS "Фамилия",
+Select 
  e.first_name AS "Фамилия",
- e.last_name AS "Имя",тамент",
+ e.last_name AS "Имя",
  d.dept_name AS "Департамент",
- ts.title AS "Должность",,
- s.amount AS "Зарплата $",",
+ ts.title AS "Должность",
+ s.amount AS "Зарплата $",
  s.from_date AS "выдана от",
- s.to_date  AS "выдана до"  e
- from employees.employee as eloyee as de
+ s.to_date  AS "выдана до" 
+ from employees.employee as e
 join employees.department_employee as de
- on e.id = de.employee_id as d
+ on e.id = de.employee_id
 join employees.department as d
  on de.department_id = d.id
 join employees.title as t
- on e.id = t.employee_id ts
-join employees.titles as tsd
+ on e.id = t.employee_id
+join employees.titles as ts
  on t.title_id = ts.title_id
 join employees.salary as s
  on e.id = s.employee_id
-whererst_name like 'Almudena'
+where
  e.first_name like 'Almudena'
-and e.last_name like 'Sur%'(to_date) from employees.title)
-and t.to_date = (select max(to_date) from employees.title));
+and e.last_name like 'Sur%'
+and t.to_date = (select max(to_date) from employees.title)
 and s.to_date = (select max(to_date) from employees.salary);
                                                                                         QUERY PLAN
 
