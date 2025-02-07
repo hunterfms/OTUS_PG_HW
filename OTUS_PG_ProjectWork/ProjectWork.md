@@ -218,7 +218,7 @@ Access method: heap
 
 employees=#
 ```
-6) Создаем резервную копию базы  employees без структуры и восстнавливаем её на этом же сервере еще в двух экземплярах employees_1 и employees_2. К защите планирую  восстановить три копии базы, что бы продемонстрировать производительность ДО оптимизации на базе employees и ПОСЛЕ оптимизации структуры на employees_1. На третьей базе employees_2 буду демонстрировать производительность третьего запроса уже с учетом нормализованной структуры данных. Команды подготовки бакапа и восстановления следующие: 
+6) Создаем резервную копию базы  employees без структуры и восстнавливаем её на этом же сервере еще в двух экземплярах employees_1 и employees_2. К защите планирую  восстановить три копии базы, что бы продемонстрировать производительность запросов Select и Update ДО оптимизации на базе employees и ПОСЛЕ оптимизации структуры на employees_1. На третьей базе employees_2 буду демонстрировать производительность третьего запроса уже с учетом нормализованной структуры данных. Команды подготовки бакапа и восстановления следующие: 
 ```
 pg_dump --username=postgres --format=c --create --compress=9 employees > /1_temp/employees_empty.dump
 ...
@@ -243,32 +243,42 @@ pg_restore -U postgres -d employees_2 < /1_temp/employees_empty.dump
 -- Cотрудники компании зарплаты у которых на текущий момент меньше прожиточного минимума на 2025г.
 -- Запрос учитывает только актуальных сотрудников, с их актуальными должностями в актуальных департаментах. 
 select 
- e2.first_name ||' '|| e2.last_name AS "Имя сотрудника",
- t2.title AS "Должность",
+ e.first_name ||' '|| e.last_name AS "Имя сотрудника",
+ t.title AS "Должность",
  s.amount AS "Зарплата на сегодня в $",
- 67690 - s.amount AS "Недостаток в $" 
+ 67690 - s.amount AS "Недостаток в $"
  from employees.salary as s
-Join employees.employee as e2
- on s.employee_id = e2.id
-join employees.title as t2
- on s.employee_id = t2.employee_id 
-  where s.employee_id in  
-(
-select distinct e.id
- from employees.title as t
-  join employees.employee as e
-   on t.employee_id = e.id
-  join employees.department_employee as de
-   on t.employee_id = de.employee_id
-  join employees.department as d
-   on de.department_id = d.id  
-  where 
-   t.to_date > (select current_date)
+Join employees.employee as e
+ on s.employee_id = e.id
+join employees.title as t
+ on s.employee_id = t.employee_id 
+join employees.department_employee as de
+ on e.id = de.employee_id
+join employees.department as d
+ on d.id = de.department_id 
+ where
+  s.from_date >= (select max(from_date) from employees.salary)
+   and s.to_date = (select max(to_date) from employees.salary)
+   and t.to_date > (select current_date)
    and de.to_date > (select current_date)
-)  and (s.from_date >= (select max(from_date) from employees.salary)
-        or s.to_date = (select max(to_date) from employees.salary))
-   and s.amount < 67690 -- средний прожиточный минимум в США
-ORDER BY s.employee_id;
+   and s.amount < 67690 
+ORDER BY s.amount;
+```
+Результат данного запроса из limit 10:
+```
+    Имя сотрудника    |     Должность      | Зарплата на сегодня в $ | Недостаток в $
+----------------------+--------------------+-------------------------+----------------
+ Woody Porenta        | Senior Engineer    |                   40960 |          26730
+ Marc Molenaar        | Assistant Engineer |                   41325 |          26365
+ Francoise Emden      | Engineer           |                   41595 |          26095
+ Margo Gihr           | Senior Engineer    |                   42895 |          24795
+ Neven Domenig        | Staff              |                   43305 |          24385
+ Taiji Mullainathan   | Staff              |                   44354 |          23336
+ Koldo Katzenelson    | Assistant Engineer |                   44775 |          22915
+ Ioana Liedekerke     | Engineer           |                   44785 |          22905
+ Gully Nittel         | Staff              |                   45363 |          22327
+ Christoper Kropatsch | Engineer           |                   45457 |          22233
+(10 rows)
 ```
 8) Разрабатывыаем свои запрос обновления данных Update.
 ```
@@ -276,352 +286,536 @@ ORDER BY s.employee_id;
 -- Запрос строится на основе условий предыдущего запроса (только актуальные сотрудники, а не уволенные).
 update employees.salary
  set amount = (67690 + (amount/3))
-where employee_id in 
-(select 
- s.employee_id
- from employees.salary as s
-Join employees.employee as e2
- on s.employee_id = e2.id
-join employees.title as t2
- on s.employee_id = t2.employee_id 
-  where s.employee_id in  
-(
-select distinct e.id
- from employees.title as t
-  join employees.employee as e
-   on t.employee_id = e.id
+where employee_id in
+ (select s.employee_id 
+  from employees.salary as s
+  Join employees.employee as e
+   on s.employee_id = e.id
+  join employees.title as t
+   on s.employee_id = t.employee_id 
   join employees.department_employee as de
-   on t.employee_id = de.employee_id
+   on e.id = de.employee_id
   join employees.department as d
-   on de.department_id = d.id  
-  where 
-   t.to_date > (select current_date)
+   on d.id = de.department_id 
+  where
+   s.from_date >= (select max(from_date) from employees.salary)
+   and s.to_date = (select max(to_date) from employees.salary)
+   and t.to_date > (select current_date)
    and de.to_date > (select current_date)
-)  and (s.from_date >= (select max(from_date) from employees.salary)
-        or s.to_date = (select max(to_date) from employees.salary))
-   and s.amount < 67690 -- средний прожиточный минимум в США
-   and t2.to_date > (select current_date))
-and (from_date >= (select max(from_date) from employees.salary)
-        or to_date = (select max(to_date) from employees.salary))
+   and s.amount < 67690
+)
+and from_date >= (select max(from_date) from employees.salary)
+and to_date = (select max(to_date) from employees.salary)
 and amount < 67690;
 ```
 9)  Проверка производительности запросов на неоптимизированной структуре базы с актуальным планом explain (analyze)
- а. Выводим актуальный план запроса Select через explain (analyze) который выводит 107728 сотрудников с зарплатами менее прожиточного минимума. Execution Time: 2565.833 ms. Первый запуск длился в пределах Execution Time: 411367.804 ms с той же структурой плана в резульаттах, скорее сего из за расчета первого плана запроса. Далее мной применялся ANALYSE;, что бы учесть статистику первого запуска и применить уже более оптимальный план выполнения.
+ а. Выводим актуальный план запроса Select через explain (analyze) который выводит 107728 сотрудников с зарплатами менее прожиточного минимума. Execution Time: 1260.088 ms. Первый запуск длился в пределах Execution Time: 411367.804 ms с той же структурой плана в резульаттах, скорее сего из за расчета первого плана запроса. Далее мной применялся ANALYSE;, что бы учесть статистику первого запуска и применить уже более оптимальный план выполнения.
 ```
-employees=# vacuum;
-VACUUM
 employees=# analyse;
 ANALYZE
 employees=# explain (analyze, buffers)
 select
- e2.first_name ||' '|| e2.last_name AS "Имя сотрудника",
- t2.title AS "Должность",
+ e.first_name ||' '|| e.last_name AS "Имя сотрудника",
+ t.title AS "Должность",
  s.amount AS "Зарплата на сегодня в $",
  67690 - s.amount AS "Недостаток в $"
  from employees.salary as s
-Join employees.employee as e2
- on s.employee_id = e2.id
-join employees.title as t2
- on s.employee_id = t2.employee_id
-  where s.employee_id in
-(
-select distinct e.id
- from employees.title as t
-  join employees.employee as e
-   on t.employee_id = e.id
-  join employees.department_employee as de
-   on t.employee_id = de.employee_id
-  join employees.department as d
-   on de.department_id = d.id
-  where
-   t.to_date > (select current_date)
+Join employees.employee as e
+ on s.employee_id = e.id
+join employees.title as t
+ on s.employee_id = t.employee_id
+join employees.department_employee as de
+ on e.id = de.employee_id
+join employees.department as d
+ on d.id = de.department_id
+ where
+  s.from_date >= (select max(from_date) from employees.salary)
+   and s.to_date = (select max(to_date) from employees.salary)
+   and t.to_date > (select current_date)
    and de.to_date > (select current_date)
-ORDER BY s.employee_id; select max(to_date) from employees.salary)))
-                                                                                                        QUERY PLAN
-
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-----------------------------------------------
- Sort  (cost=197927.75..198273.42 rows=138268 width=67) (actual time=2527.542..2548.613 rows=152067 loops=1)
-   Sort Key: s.employee_id
-   Sort Method: external merge  Disk: 9584kB
-   Buffers: shared hit=15779 read=52039, temp read=9211 written=10088
+   and s.amount < 67690
+ORDER BY s.amount;
+                                                                                QUERY PLAN
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Gather Merge  (cost=123837.40..123839.01 rows=14 width=59) (actual time=1257.061..1258.292 rows=278 loops=1)
+   Workers Planned: 1
+   Params Evaluated: $1, $3, $4, $5
+   Workers Launched: 1
+   Buffers: shared hit=8923 read=53289
    InitPlan 1 (returns $1)
-     ->  Finalize Aggregate  (cost=33927.96..33927.97 rows=1 width=4) (actual time=424.734..424.793 rows=1 loops=1)
-           Buffers: shared hit=673 read=17442
-           ->  Gather  (cost=33927.75..33927.96 rows=2 width=4) (actual time=424.724..424.784 rows=3 loops=1)
+     ->  Finalize Aggregate  (cost=33927.96..33927.97 rows=1 width=4) (actual time=435.822..435.866 rows=1 loops=1)
+           Buffers: shared hit=256 read=17859
+           ->  Gather  (cost=33927.75..33927.96 rows=2 width=4) (actual time=432.980..435.780 rows=3 loops=1)
                  Workers Planned: 2
                  Workers Launched: 2
-                 Buffers: shared hit=673 read=17442
-                 ->  Partial Aggregate  (cost=32927.75..32927.76 rows=1 width=4) (actual time=290.269..290.270 rows=1 loops=3)
-                       Buffers: shared hit=673 read=17442
-                       ->  Parallel Seq Scan on salary  (cost=0.00..29965.20 rows=1185020 width=4) (actual time=0.022..174.837 rows=948016 loops=3)
-                             Buffers: shared hit=673 read=17442
+                 Buffers: shared hit=256 read=17859
+                 ->  Partial Aggregate  (cost=32927.75..32927.76 rows=1 width=4) (actual time=394.460..394.461 rows=1 loops=3)
+                       Buffers: shared hit=256 read=17859
+                       ->  Parallel Seq Scan on salary  (cost=0.00..29965.20 rows=1185020 width=4) (actual time=0.152..192.695 rows=948016 loops=3)
+                             Buffers: shared hit=256 read=17859
    InitPlan 2 (returns $3)
-     ->  Finalize Aggregate  (cost=33927.96..33927.97 rows=1 width=4) (actual time=433.484..433.510 rows=1 loops=1)
-           Buffers: shared hit=769 read=17346
-           ->  Gather  (cost=33927.75..33927.96 rows=2 width=4) (actual time=433.392..433.499 rows=3 loops=1)
+     ->  Finalize Aggregate  (cost=33927.96..33927.97 rows=1 width=4) (actual time=433.605..433.627 rows=1 loops=1)
+           Buffers: shared hit=352 read=17763
+           ->  Gather  (cost=33927.75..33927.96 rows=2 width=4) (actual time=433.595..433.619 rows=3 loops=1)
                  Workers Planned: 2
                  Workers Launched: 2
-                 Buffers: shared hit=769 read=17346
-                 ->  Partial Aggregate  (cost=32927.75..32927.76 rows=1 width=4) (actual time=392.718..392.719 rows=1 loops=3)
-                       Buffers: shared hit=769 read=17346
-                       ->  Parallel Seq Scan on salary salary_1  (cost=0.00..29965.20 rows=1185020 width=4) (actual time=0.025..152.525 rows=948016 loops=3)
-                             Buffers: shared hit=769 read=17346
-   ->  Hash Join  (cost=40370.89..112592.22 rows=138268 width=67) (actual time=2182.850..2487.778 rows=152067 loops=1)
-         Hash Cond: (s.employee_id = e2.id)
-         Buffers: shared hit=15779 read=52039, temp read=8013 written=8886
-         ->  Seq Scan on salary s  (cost=0.00..67885.82 rows=607224 width=16) (actual time=889.819..1104.157 rows=107728 loops=1)
-               Filter: ((amount < 67690) AND ((from_date >= $1) OR (to_date = $3)))
-               Rows Removed by Filter: 2736319
-               Buffers: shared hit=2306 read=52039
-         ->  Hash  (cost=39740.05..39740.05 rows=50467 width=50) (actual time=1292.889..1296.257 rows=371243 loops=1)
-               Buckets: 131072 (originally 65536)  Batches: 2 (originally 1)  Memory Usage: 17213kB
-               Buffers: shared hit=13473, temp read=5979 written=8596
-               ->  Hash Join  (cost=29947.90..39740.05 rows=50467 width=50) (actual time=979.030..1203.403 rows=371243 loops=1)
-                     Hash Cond: (t2.employee_id = e2.id)
-                     Buffers: shared hit=13473, temp read=5979 written=6852
-                     ->  Seq Scan on title t2  (cost=0.00..7625.08 rows=443308 width=19) (actual time=0.005..24.244 rows=443308 loops=1)
-                           Buffers: shared hit=3192
-                     ->  Hash  (cost=29520.96..29520.96 rows=34155 width=31) (actual time=978.934..982.301 rows=240124 loops=1)
-                           Buckets: 131072 (originally 65536)  Batches: 4 (originally 1)  Memory Usage: 7169kB
-                           Buffers: shared hit=10281, temp read=2447 written=4515
-                           ->  Hash Join  (cost=23252.15..29520.96 rows=34155 width=31) (actual time=760.936..921.750 rows=240124 loops=1)
-                                 Hash Cond: (e2.id = e.id)
-                                 Buffers: shared hit=10281, temp read=2447 written=3320
-                                 ->  Seq Scan on employee e2  (cost=0.00..5481.24 rows=300024 width=23) (actual time=0.002..17.036 rows=300024 loops=1)
-                                       Buffers: shared hit=2481
-                                 ->  Hash  (cost=22825.21..22825.21 rows=34155 width=8) (actual time=760.839..764.205 rows=240124 loops=1)
-                                       Buckets: 262144 (originally 65536)  Batches: 2 (originally 1)  Memory Usage: 6736kB
-                                       Buffers: shared hit=7800, temp read=994 written=2277
-                                       ->  HashAggregate  (cost=22142.11..22483.66 rows=34155 width=8) (actual time=642.742..725.329 rows=240124 loops=1)
-                                             Group Key: e.id
-                                             Batches: 21  Memory Usage: 8249kB  Disk Usage: 7336kB
-                                             Buffers: shared hit=7800, temp read=994 written=1867
-                                             InitPlan 3 (returns $4)
-                                               ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.007..0.008 rows=1 loops=1)
-                                             InitPlan 4 (returns $5)
-                                               ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.002..0.003 rows=1 loops=1)
-                                             ->  Gather  (cost=18299.65..22056.70 rows=34155 width=8) (actual time=497.556..584.168 rows=240124 loops=1)
-                                                   Workers Planned: 1
-                                                   Params Evaluated: $4, $5
-                                                   Workers Launched: 1
-                                                   Buffers: shared hit=7800, temp read=124 written=263
-                                                   ->  HashAggregate  (cost=17299.65..17641.20 rows=34155 width=8) (actual time=476.468..502.955 rows=120062 loops=2)
-                                                         Group Key: e.id
-                                                         Batches: 5  Memory Usage: 8241kB  Disk Usage: 720kB
-                                                         Buffers: shared hit=7800, temp read=124 written=263
-                                                         Worker 0:  Batches: 5  Memory Usage: 11057kB  Disk Usage: 680kB
-                                                         ->  Hash Join  (cost=11636.05..17214.26 rows=34155 width=8) (actual time=254.970..421.572 rows=120062 loops=2)
-                                                               Hash Cond: (de.department_id = d.id)
-                                                               Buffers: shared hit=7800
-                                                               ->  Parallel Hash Join  (cost=11634.85..16743.43 rows=34155 width=13) (actual time=242.318..363.883 rows=120062 loops=2)
-                                                                     Hash Cond: (e.id = t.employee_id)
-                                                                     Buffers: shared hit=7786
-                                                                     ->  Parallel Seq Scan on employee e  (cost=0.00..4245.85 rows=176485 width=8) (actual time=0.004..12.903 rows=150012 loops=2)
-                                                                           Buffers: shared hit=2481
-                                                                     ->  Parallel Hash  (cost=11207.91..11207.91 rows=34155 width=21) (actual time=239.773..239.990 rows=120062 loops=2)
-                                                                           Buckets: 262144 (originally 65536)  Batches: 1 (originally 1)  Memory Usage: 16768kB
-                                                                           Buffers: shared hit=5305
-                                                                           ->  Parallel Hash Join  (cost=6270.52..11207.91 rows=34155 width=21) (actual time=89.007..183.388rows=120062 loops=2)
-                                                                                 Hash Cond: (de.employee_id = t.employee_id)
-                                                                                 Buffers: shared hit=5305
-                                                                                 ->  Parallel Seq Scan on department_employee de  (cost=0.00..4551.26 rows=65020 width=13) (actual time=0.022..28.381 rows=120062 loops=2)
-                                                                                       Filter: (to_date > $5)
-                                                                                       Rows Removed by Filter: 45740
-                                                                                       Buffers: shared hit=2113
-                                                                                 ->  Parallel Hash  (cost=5500.90..5500.90 rows=61570 width=8) (actual time=88.000..88.001 rows=120062 loops=2)
-                                                                                       Buckets: 262144  Batches: 1  Memory Usage: 11456kB
-                                                                                       Buffers: shared hit=3192
-                                                                                       ->  Parallel Seq Scan on title t  (cost=0.00..5500.90 rows=61570 width=8) (actual time=0.017..38.282 rows=120062 loops=2)
-                                                                                             Filter: (to_date > $4)
-                                                                                             Rows Removed by Filter: 101592
-                                                                                             Buffers: shared hit=3192
-                                                               ->  Hash  (cost=1.09..1.09 rows=9 width=5) (actual time=12.624..12.625
-rows=9 loops=2)
-                                                                     Buckets: 1024  Batches: 1  Memory Usage: 9kB
-                                                                     Buffers: shared hit=2
-                                                                     ->  Seq Scan on department d  (cost=0.00..1.09 rows=9 width=5) (actual time=12.611..12.613 rows=9 loops=2)
-                                                                           Buffers: shared hit=2 Planning: Buffers: shared hit=48
- Planning Time: 0.638 ms
+                 Buffers: shared hit=352 read=17763
+                 ->  Partial Aggregate  (cost=32927.75..32927.76 rows=1 width=4) (actual time=396.721..396.721 rows=1 loops=3)
+                       Buffers: shared hit=352 read=17763
+                       ->  Parallel Seq Scan on salary salary_1  (cost=0.00..29965.20 rows=1185020 width=4) (actual time=0.030..177.697 rows=948016 loops=3)
+                             Buffers: shared hit=352 read=17763
+   InitPlan 3 (returns $4)
+     ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.004..0.004 rows=1 loops=1)
+   InitPlan 4 (returns $5)
+     ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.002..0.002 rows=1 loops=1)
+   ->  Sort  (cost=54981.42..54981.46 rows=14 width=59) (actual time=362.411..362.424 rows=139 loops=2)
+         Sort Key: s.amount
+         Sort Method: quicksort  Memory: 38kB
+         Buffers: shared hit=8315 read=17667
+         Worker 0:  Sort Method: quicksort  Memory: 35kB
+         ->  Hash Join  (cost=49852.51..54981.16 rows=14 width=59) (actual time=318.432..362.330 rows=139 loops=2)
+               Hash Cond: (de.department_id = d.id)
+               Buffers: shared hit=8278 read=17667
+               ->  Parallel Hash Join  (cost=49851.31..54979.66 rows=14 width=39) (actual time=298.108..341.943 rows=139 loops=2)
+                     Hash Cond: (e.id = s.employee_id)
+                     Buffers: shared hit=8246 read=17667
+                     ->  Parallel Seq Scan on employee e  (cost=0.00..4245.85 rows=176485 width=23) (actual time=0.005..14.608 rows=150012 loops=2)
+                           Buffers: shared hit=2481
+                     ->  Parallel Hash  (cost=49851.13..49851.13 rows=14 width=48) (actual time=296.165..296.168 rows=139 loops=2)
+                           Buckets: 1024  Batches: 1  Memory Usage: 72kB
+                           Buffers: shared hit=5753 read=17667
+                           ->  Parallel Hash Join  (cost=44893.44..49851.13 rows=14 width=48) (actual time=249.874..296.076 rows=139 loops=2)
+                                 Hash Cond: (de.employee_id = s.employee_id)
+                                 Buffers: shared hit=5753 read=17667
+                                 ->  Parallel Seq Scan on department_employee de  (cost=0.00..4551.26 rows=65020 width=13) (actual time=0.020..33.176 rows=120062 loops=2)
+                                       Filter: (to_date > $5)
+                                       Rows Removed by Filter: 45740
+                                       Buffers: shared hit=2113
+                                 ->  Parallel Hash  (cost=44893.14..44893.14 rows=24 width=35) (actual time=247.681..247.683 rows=139 loops=2)
+                                       Buckets: 1024  Batches: 1  Memory Usage: 72kB
+                                       Buffers: shared hit=3640 read=17667
+                                       ->  Parallel Hash Join  (cost=38853.41..44893.14 rows=24 width=35) (actual time=189.142..247.568 rows=139 loops=2)
+                                             Hash Cond: (t.employee_id = s.employee_id)
+                                             Buffers: shared hit=3640 read=17667
+                                             ->  Parallel Seq Scan on title t  (cost=0.00..5500.90 rows=61570 width=19) (actual time=0.022..37.508 rows=120062 loops=2)
+                                                   Filter: (to_date > $4)
+                                                   Rows Removed by Filter: 101592
+                                                   Buffers: shared hit=3192
+                                             ->  Parallel Hash  (cost=38852.84..38852.84 rows=45 width=16) (actual time=186.094..186.095 rows=139 loops=2)
+                                                   Buckets: 1024  Batches: 1  Memory Usage: 72kB
+                                                   Buffers: shared hit=448 read=17667
+                                                   ->  Parallel Seq Scan on salary s  (cost=0.00..38852.84 rows=45 width=16) (actual time=1.581..185.915 rows=139 loops=2)
+                                                         Filter: ((from_date >= $1) AND (amount < 67690) AND (to_date = $3))
+                                                         Rows Removed by Filter: 1421884
+                                                         Buffers: shared hit=448 read=17667
+               ->  Hash  (cost=1.09..1.09 rows=9 width=5) (actual time=20.289..20.289 rows=9 loops=2)
+                     Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                     Buffers: shared hit=2
+                     ->  Seq Scan on department d  (cost=0.00..1.09 rows=9 width=5) (actual time=20.275..20.277 rows=9 loops=2)
+                           Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=76
+ Planning Time: 0.660 ms
  JIT:
-   Functions: 136
+   Functions: 108
    Options: Inlining false, Optimization false, Expressions true, Deforming true
-   Timing: Generation 8.810 ms, Inlining 0.000 ms, Optimization 2.650 ms, Emission 78.325 ms, Total 89.786 ms
- Execution Time: 2565.833 ms
-(108 rows)
+   Timing: Generation 4.111 ms, Inlining 0.000 ms, Optimization 2.504 ms, Emission 137.435 ms, Total 144.050 ms
+ Execution Time: 1260.088 ms
+(84 rows)
 ```
 В выведенном плане наблюдаем в основном блоки Seq Scan из за отсутсвия индексов и соответсвенно высокую длительность обработки Execution Time.
 
- б. Выводим актуальный план запроса Update через explain (analyze, buffers) при котором реально обновляются 107728 строки таблицы зарплат employees.salary. Execution Execution Time: 18231.000 ms
+ б. Выводим актуальный план запроса Update через explain (analyze, buffers) при котором реально обновляются 107728 строки таблицы зарплат employees.salary. Execution Execution Time: 2427.629 ms
 ```
 employees=# explain (analyze, buffers)
 update employees.salary
  set amount = (67690 + (amount/3))
 where employee_id in
-(select
- s.employee_id
- from employees.salary as s
-Join employees.employee as e2
- on s.employee_id = e2.id
-join employees.title as t2
- on s.employee_id = t2.employee_id
-  where s.employee_id in
-(
-select distinct e.id
- from employees.title as t
-  join employees.employee as e
-   on t.employee_id = e.id
+ (select s.employee_id
+  from employees.salary as s
+  Join employees.employee as e
+   on s.employee_id = e.id
+  join employees.title as t
+   on s.employee_id = t.employee_id
   join employees.department_employee as de
-   on t.employee_id = de.employee_id
+   on e.id = de.employee_id
   join employees.department as d
-   on de.department_id = d.id
+   on d.id = de.department_id
   where
-   t.to_date > (select current_date)
+   s.from_date >= (select max(from_date) from employees.salary)
+   and s.to_date = (select max(to_date) from employees.salary)
+   and t.to_date > (select current_date)
    and de.to_date > (select current_date)
-and amount < 67690;= (select max(to_date) from employees.salary)))))
-                                                                                                          QUERY PLAN
-
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
---------------------------------------------------
- Update on salary  (cost=332633.37..413697.95 rows=0 width=0) (actual time=18226.598..18226.611 rows=0 loops=1)
-   Buffers: shared hit=343656 read=121150 dirtied=35292 written=15957, temp read=12637 written=12989
+   and s.amount < 67690
+)
+and from_date >= (select max(from_date) from employees.salary)
+and to_date = (select max(to_date) from employees.salary)
+and amount < 67690;
+                                                                                        QUERY PLAN
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Update on salary  (cost=240763.57..376573.10 rows=0 width=0) (actual time=2405.081..2405.089 rows=0 loops=1)
+   Buffers: shared hit=12463 read=105140 dirtied=284 written=2, temp read=6162 written=6162
    InitPlan 1 (returns $0)
-     ->  Aggregate  (cost=53665.59..53665.60 rows=1 width=4) (actual time=392.170..392.171 rows=1 loops=1)
-           Buffers: shared hit=897 read=17218
-           ->  Seq Scan on salary salary_1  (cost=0.00..46555.47 rows=2844047 width=4) (actual time=0.010..192.163 rows=2844047 loops=1)
-                 Buffers: shared hit=897 read=17218
+     ->  Aggregate  (cost=53665.59..53665.60 rows=1 width=4) (actual time=370.152..370.153 rows=1 loops=1)
+           Buffers: shared hit=513 read=17602
+           ->  Seq Scan on salary salary_1  (cost=0.00..46555.47 rows=2844047 width=4) (actual time=0.010..181.774 rows=2844047 loops=1)
+                 Buffers: shared hit=513 read=17602
    InitPlan 2 (returns $1)
-     ->  Aggregate  (cost=53665.59..53665.60 rows=1 width=4) (actual time=390.128..390.128 rows=1 loops=1)
-           Buffers: shared hit=929 read=17186
-           ->  Seq Scan on salary salary_2  (cost=0.00..46555.47 rows=2844047 width=4) (actual time=0.005..188.809 rows=2844047 loops=1)
-                 Buffers: shared hit=929 read=17186
+     ->  Aggregate  (cost=53665.59..53665.60 rows=1 width=4) (actual time=385.578..385.578 rows=1 loops=1)
+           Buffers: shared hit=576 read=17539
+           ->  Seq Scan on salary salary_2  (cost=0.00..46555.47 rows=2844047 width=4) (actual time=0.003..184.261 rows=2844047 loops=1)
+                 Buffers: shared hit=576 read=17539
    InitPlan 3 (returns $2)
-     ->  Aggregate  (cost=53665.59..53665.60 rows=1 width=4) (actual time=373.878..373.879 rows=1 loops=1)
-           Buffers: shared hit=961 read=17154
-           ->  Seq Scan on salary salary_3  (cost=0.00..46555.47 rows=2844047 width=4) (actual time=0.002..185.437 rows=2844047 loops=1)
-                 Buffers: shared hit=961 read=17154
+     ->  Aggregate  (cost=53665.59..53665.60 rows=1 width=4) (actual time=366.534..366.535 rows=1 loops=1)
+           Buffers: shared hit=608 read=17507
+           ->  Seq Scan on salary salary_3  (cost=0.00..46555.47 rows=2844047 width=4) (actual time=0.001..181.322 rows=2844047 loops=1)
+                 Buffers: shared hit=608 read=17507
    InitPlan 4 (returns $3)
-     ->  Aggregate  (cost=53665.59..53665.60 rows=1 width=4) (actual time=542.888..542.888 rows=1 loops=1)
-           Buffers: shared hit=993 read=17122
-           ->  Seq Scan on salary salary_4  (cost=0.00..46555.47 rows=2844047 width=4) (actual time=0.004..244.300 rows=2844047 loops=1)
-                 Buffers: shared hit=993 read=17122
+     ->  Aggregate  (cost=53665.59..53665.60 rows=1 width=4) (actual time=378.609..378.610 rows=1 loops=1)
+           Buffers: shared hit=640 read=17475
+           ->  Seq Scan on salary salary_4  (cost=0.00..46555.47 rows=2844047 width=4) (actual time=0.004..179.681 rows=2844047 loops=1)
+                 Buffers: shared hit=640 read=17475
    InitPlan 5 (returns $4)
      ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.004..0.004 rows=1 loops=1)
-   ->  Hash Semi Join  (cost=117970.97..199035.55 rows=195499 width=64) (actual time=3127.527..4045.607 rows=107728 loops=1)
-         Hash Cond: (salary.employee_id = s.employee_id)
-         Buffers: shared hit=18266 read=103884 written=7974, temp read=12637 written=12989
-         ->  Seq Scan on salary  (cost=0.00..67885.82 rows=607224 width=22) (actual time=817.409..1657.324 rows=107728 loops=1)
-               Filter: ((amount < 67690) AND ((from_date >= $0) OR (to_date = $1)))
-               Rows Removed by Filter: 2736319
-               Buffers: shared hit=1827 read=52518 written=7974
-         ->  Hash  (cost=115919.58..115919.58 rows=78351 width=82) (actual time=2310.044..2310.051 rows=107728 loops=1)
-               Buckets: 65536  Batches: 2  Memory Usage: 6847kB
-               Buffers: shared hit=16439 read=51366, temp read=11640 written=12699
-               ->  Hash Join  (cost=45177.89..115919.58 rows=78351 width=82) (actual time=2003.592..2277.994 rows=107728 loops=1)
-                     Hash Cond: (s.employee_id = e2.id)
-                     Buffers: shared hit=16439 read=51366, temp read=11640 written=11992
-                     ->  Seq Scan on salary s  (cost=0.00..67885.82 rows=607224 width=14) (actual time=916.786..1127.951 rows=107728 loops=1)
-                           Filter: ((amount < 67690) AND ((from_date >= $2) OR (to_date = $3)))
-                           Rows Removed by Filter: 2736319
-                           Buffers: shared hit=2979 read=51366
-                     ->  Hash  (cost=44820.43..44820.43 rows=28597 width=68) (actual time=1086.653..1086.659 rows=240124 loops=1)
-                           Buckets: 131072 (originally 32768)  Batches: 4 (originally 1)  Memory Usage: 7169kB
-                           Buffers: shared hit=13460, temp read=9260 written=11632
-                           ->  Hash Join  (cost=35246.97..44820.43 rows=28597 width=68) (actual time=879.583..1027.327 rows=240124 loops=1)
-                                 Hash Cond: (t2.employee_id = e2.id)
-                                 Buffers: shared hit=13460, temp read=9260 written=9612
-                                 ->  Seq Scan on title t2  (cost=0.00..8733.35 rows=147769 width=14) (actual time=0.017..43.796 rows=240124 loops=1)
-                                       Filter: (to_date > $4)
-                                       Rows Removed by Filter: 203184
-                                       Buffers: shared hit=3192
-                                 ->  Hash  (cost=34521.19..34521.19 rows=58063 width=54) (actual time=879.510..879.516 rows=240124 loops=1)
-                                       Buckets: 131072 (originally 65536)  Batches: 4 (originally 1)  Memory Usage: 7169kB
-                                       Buffers: shared hit=10268, temp read=6796 written=8816
-                                       ->  Hash Join  (cost=28252.37..34521.19 rows=58063 width=54) (actual time=668.640..824.852 rows=240124 loops=1)
-                                             Hash Cond: (e2.id = "ANY_subquery".id)
-                                             Buffers: shared hit=10268, temp read=6796 written=7148
-                                             ->  Seq Scan on employee e2  (cost=0.00..5481.24 rows=300024 width=14) (actual time=0.005..28.035 rows=300024 loops=1)
-                                                   Buffers: shared hit=2481
-                                             ->  Hash  (cost=27526.59..27526.59 rows=58063 width=40) (actual time=668.576..668.581 rows=240124 loops=1)
-                                                   Buckets: 131072 (originally 65536)  Batches: 4 (originally 1)  Memory Usage: 7169kB
-                                                   Buffers: shared hit=7787, temp read=4165 written=5834
-                                                   ->  Subquery Scan on "ANY_subquery"  (cost=26365.33..27526.59 rows=58063 width=40) (actual time=527.978..620.452 rows=240124 loops=1)
-                                                         Buffers: shared hit=7787, temp read=4165 written=4517
-                                                         ->  HashAggregate  (cost=26365.33..26945.96 rows=58063 width=8) (actual time=527.792..584.728 rows=240124 loops=1)
-                                                               Group Key: e.id
-                                                               Batches: 5  Memory Usage: 8241kB  Disk Usage: 3816kB
-                                                               Buffers: shared hit=7787, temp read=4165 written=4517
-                                                               InitPlan 6 (returns $5)
-                                                                 ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.002..0.002 rows=1 loops=1)
-                                                               InitPlan 7 (returns $6)
-                                                                 ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.002..0.002 rows=1 loops=1)
-                                                               ->  Hash Join  (cost=18234.82..26220.14 rows=58063 width=8) (actual time=245.983..466.339 rows=240124 loops=1)
-                                                                     Hash Cond: (de.department_id = d.id)
-                                                                     Buffers: shared hit=7787, temp read=3696 written=3696
-                                                                     ->  Hash Join  (cost=18233.61..25420.57 rows=58063 width=13) (actual time=245.961..423.941 rows=240124 loops=1)
-                                                                           Hash Cond: (e.id = t.employee_id)
-                                                                           Buffers: shared hit=7786, temp read=3696 written=3696
-                                                                           ->  Seq Scan on employee e  (cost=0.00..5481.24 rows=300024 width=8) (actual time=0.002..18.472 rows=300024 loops=1)
-                                                                                 Buffers: shared hit=2481
-                                                                           ->  Hash  (cost=17507.83..17507.83 rows=58063 width=21) (actual time=245.897..245.899 rows=240124 loops=1)
-                                                                                 Buckets: 262144 (originally 65536)  Batches: 4 (originally 1)  Memory Usage: 8260kB
-                                                                                 Buffers: shared hit=5305, temp read=1231 written=1832
-                                                                                 ->  Hash Join  (cost=7639.71..17507.83 rows=58063 width=21) (actual time=70.261..204.481 rows=240124 loops=1)
-                                                                                       Hash Cond: (t.employee_id = de.employee_id)
-                                                                                       Buffers: shared hit=5305, temp read=1231 written=1231
-                                                                                       ->  Seq Scan on title t  (cost=0.00..8733.35 rows=147769 width=8) (actual time=0.008..39.434 rows=240124 loops=1)
-                                                                                             Filter: (to_date > $5)
-                                                                                             Rows Removed by Filter: 203184
-                                                                                             Buffers: shared hit=3192
-                                                                                       ->  Hash  (cost=6258.04..6258.04 rows=110534 width=13) (actual time=70.155..70.156 rows=240124 loops=1)
-                                                                                             Buckets: 262144 (originally 131072)  Batches: 2 (originally 1)  Memory Usage: 7322kB
-                                                                                             Buffers: shared hit=2113, temp written=483
-                                                                                             ->  Seq Scan on department_employee de  (cost=0.00..6258.04 rows=110534 width=13) (actual time=0.010..31.150 rows=240124 loops=1)
-                                                                                                   Filter: (to_date > $6)
-                                                                                                   Rows Removed by Filter: 91479
-                                                                                                   Buffers: shared hit=2113
-                                                                     ->  Hash  (cost=1.09..1.09 rows=9 width=5) (actual time=0.013..0.013 rows=9 loops=1)
-                                                                           Buckets: 1024  Batches: 1  Memory Usage: 9kB
-                                                                           Buffers: shared hit=1
-                                                                           ->  Seq Scan on department d  (cost=0.00..1.09 rows=9 width=5) (actual time=0.006..0.007 rows=9 loops=1)
-                                                                                 Buffers: shared hit=1 Planning Time: 0.516 ms
+   InitPlan 6 (returns $5)
+     ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.002..0.002 rows=1 loops=1)
+   ->  Nested Loop Semi Join  (cost=26101.15..161910.68 rows=1 width=44) (actual time=2218.878..2400.552 rows=278 loops=1)
+         Join Filter: (salary.employee_id = s.employee_id)
+         Rows Removed by Join Filter: 38503
+         Buffers: shared hit=11340 read=105137, temp read=6162 written=6162
+         ->  Seq Scan on salary  (cost=0.00..67885.82 rows=107 width=22) (actual time=782.307..955.548 rows=278 loops=1)
+               Filter: ((from_date >= $0) AND (amount < 67690) AND (to_date = $1))
+               Rows Removed by Filter: 2843769
+               Buffers: shared hit=1633 read=52712
+         ->  Materialize  (cost=26101.15..93988.00 rows=23 width=62) (actual time=4.521..5.190 rows=140 loops=278)
+               Buffers: shared hit=9707 read=52425, temp read=6162 written=6162
+               ->  Hash Join  (cost=26101.15..93987.88 rows=23 width=62) (actual time=1256.933..1441.148 rows=278 loops=1)
+                     Hash Cond: (de.department_id = d.id)
+                     Buffers: shared hit=9707 read=52425, temp read=6162 written=6162
+                     ->  Hash Join  (cost=26099.95..93986.36 rows=23 width=61) (actual time=1256.906..1440.987 rows=278 loops=1)
+                           Hash Cond: (s.employee_id = e.id)
+                           Buffers: shared hit=9706 read=52425, temp read=6162 written=6162
+                           ->  Seq Scan on salary s  (cost=0.00..67885.82 rows=107 width=14) (actual time=745.223..919.776 rows=278 loops=1)
+                                 Filter: ((from_date >= $2) AND (amount < 67690) AND (to_date = $3))
+                                 Rows Removed by Filter: 2843769
+                                 Buffers: shared hit=1920 read=52425
+                           ->  Hash  (cost=25419.44..25419.44 rows=54441 width=47) (actual time=507.461..507.463 rows=240124 loops=1)
+                                 Buckets: 131072 (originally 65536)  Batches: 4 (originally 1)  Memory Usage: 7169kB
+                                 Buffers: shared hit=7786, temp read=4554 written=6156
+                                 ->  Hash Join  (cost=18232.83..25419.44 rows=54441 width=47) (actual time=295.234..447.330 rows=240124 loops=1)
+                                       Hash Cond: (e.id = t.employee_id)
+                                       Buffers: shared hit=7786, temp read=4554 written=4554
+                                       ->  Seq Scan on employee e  (cost=0.00..5481.24 rows=300024 width=14) (actual time=0.008..28.122 rows=300024 loops=1)
+                                             Buffers: shared hit=2481
+                                       ->  Hash  (cost=17507.48..17507.48 rows=58028 width=33) (actual time=295.169..295.171 rows=240124 loops=1)
+                                             Buckets: 131072 (originally 65536)  Batches: 4 (originally 1)  Memory Usage: 7169kB
+                                             Buffers: shared hit=5305, temp read=1991 written=3241
+                                             ->  Hash Join  (cost=7639.71..17507.48 rows=58028 width=33) (actual time=85.441..237.000 rows=240124 loops=1)
+                                                   Hash Cond: (t.employee_id = de.employee_id)
+                                                   Buffers: shared hit=5305, temp read=1991 written=1991
+                                                   ->  Seq Scan on title t  (cost=0.00..8733.35 rows=147769 width=14) (actual time=0.012..43.137 rows=240124 loops=1)
+                                                         Filter: (to_date > $4)
+                                                         Rows Removed by Filter: 203184
+                                                         Buffers: shared hit=3192
+                                                   ->  Hash  (cost=6258.04..6258.04 rows=110534 width=19) (actual time=85.053..85.054 rows=240124 loops=1)
+                                                         Buckets: 262144 (originally 131072)  Batches: 4 (originally 1)  Memory Usage: 6785kB
+                                                         Buffers: shared hit=2113, temp written=899
+                                                         ->  Seq Scan on department_employee de  (cost=0.00..6258.04 rows=110534 width=19) (actual time=0.010..31.382 rows=240124 loops=1)
+                                                               Filter: (to_date > $5)
+                                                               Rows Removed by Filter: 91479
+                                                               Buffers: shared hit=2113
+                     ->  Hash  (cost=1.09..1.09 rows=9 width=11) (actual time=0.014..0.014 rows=9 loops=1)
+                           Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                           Buffers: shared hit=1
+                           ->  Seq Scan on department d  (cost=0.00..1.09 rows=9 width=11) (actual time=0.008..0.009 rows=9 loops=1)
+                                 Buffers: shared hit=1
+ Planning:
+   Buffers: shared hit=3
+ Planning Time: 0.435 ms
  JIT:
-   Functions: 93
+   Functions: 63
    Options: Inlining false, Optimization false, Expressions true, Deforming true
-   Timing: Generation 2.958 ms, Inlining 0.000 ms, Optimization 1.727 ms, Emission 35.648 ms, Total 40.332 ms
- Execution Time: 18231.000 ms
-(108 rows)
+   Timing: Generation 2.053 ms, Inlining 0.000 ms, Optimization 0.980 ms, Emission 24.981 ms, Total 28.015 ms
+ Execution Time: 2427.629 ms
+(84 rows)
 ```
 ### Доработка структуры таблиц для запроса Select.
 10) Дорабатываем структуру базы employees_1 (база для проверки обоих запросов с доработанной структурой) - создаем структуру ключей и индексов под запрос Select . Выводим весь список индексов и ключей в таблицах схемы. Предполагается, что данные индексы будуn использоваться оптимизатором для более быстрой выбоки данных по условиям запроса и для сборки данных в Join.
 ```
-employees=# \c employees_1
-You are now connected to database "employees_1" as user "postgres".
-employees_1=# 
+employees_1=# CREATE UNIQUE INDEX idx_employee_id_primary ON employees.employee USING btree (id);
+CREATE UNIQUE INDEX idx_department_id_primary ON employees.department USING btree (id);
+CREATE INDEX idx_title_todate ON employees.title USING btree (to_date);
+CREATE INDEX idx_title_empid ON employees.title USING btree (employee_id);
+CREATE INDEX idx_salary_empid ON employees.salary USING btree (employee_id);
+CREATE INDEX idx_salary_todate ON employees.salary USING btree (to_date);
+CREATE INDEX idx_salary_fromdate ON employees.salary USING btree (from_date);
+CREATE INDEX idx_salary_amount ON employees.salary USING btree (amount);
+CREATE INDEX idx_department_employee_to_date ON employees.department_employee USING btree (to_date);
+CREATE INDEX idx_department_employee_depid ON employees.department_employee USING btree (department_id);
+CREATE INDEX idx_department_employee_employeeid ON employees.department_employee USING btree (employee_id);
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+CREATE INDEX
+employees=# analyse;
+ANALYZE
 employees_1=# SELECT tablename, indexname, indexdef FROM pg_indexes where schemaname = 'employees';
+      tablename      |             indexname              |                                                  indexdef
+---------------------+------------------------------------+------------------------------------------------------------------------------------------------------------
+ employee            | idx_employee_id_primary            | CREATE UNIQUE INDEX idx_employee_id_primary ON employees.employee USING btree (id)
+ department          | idx_department_id_primary          | CREATE UNIQUE INDEX idx_department_id_primary ON employees.department USING btree (id)
+ title               | idx_title_todate                   | CREATE INDEX idx_title_todate ON employees.title USING btree (to_date)
+ title               | idx_title_empid                    | CREATE INDEX idx_title_empid ON employees.title USING btree (employee_id)
+ salary              | idx_salary_empid                   | CREATE INDEX idx_salary_empid ON employees.salary USING btree (employee_id)
+ salary              | idx_salary_todate                  | CREATE INDEX idx_salary_todate ON employees.salary USING btree (to_date)
+ salary              | idx_salary_fromdate                | CREATE INDEX idx_salary_fromdate ON employees.salary USING btree (from_date)
+ salary              | idx_salary_amount                  | CREATE INDEX idx_salary_amount ON employees.salary USING btree (amount)
+ department_employee | idx_department_employee_to_date    | CREATE INDEX idx_department_employee_to_date ON employees.department_employee USING btree (to_date)
+ department_employee | idx_department_employee_depid      | CREATE INDEX idx_department_employee_depid ON employees.department_employee USING btree (department_id)
+ department_employee | idx_department_employee_employeeid | CREATE INDEX idx_department_employee_employeeid ON employees.department_employee USING btree (employee_id)
+(11 rows)
 ```
 ### Проверка производительности запросов после доработки структуры. 
 11) Проверка производительности запросов на оптимизированной структуре базы с актуальным планам explain (analyze, buffers) показала значительный прирост производительности запроса Select за счет индексов.
 
-Ранее время обработки было - Execution Time: 2565.833 ms
+Ранее время обработки было - Execution Time: 1260.088 ms
 
-После доработки структуры - Execution Time: 
+После доработки структуры - Execution Time: 100.351 ms
 ```
+employees_1=# explain (analyze, buffers)
+select
+ e.first_name ||' '|| e.last_name AS "Имя сотрудника",
+ t.title AS "Должность",
+ s.amount AS "Зарплата на сегодня в $",
+ 67690 - s.amount AS "Недостаток в $"
+ from employees.salary as s
+Join employees.employee as e
+ on s.employee_id = e.id
+join employees.title as t
+ on s.employee_id = t.employee_id
+join employees.department_employee as de
+ on e.id = de.employee_id
+join employees.department as d
+ on d.id = de.department_id
+ where
+  s.from_date >= (select max(from_date) from employees.salary)
+   and s.to_date = (select max(to_date) from employees.salary)
+   and t.to_date > (select current_date)
+   and de.to_date > (select current_date)
+   and s.amount < 67690
+ORDER BY s.amount;
+                                                                                         QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=2681.57..2681.63 rows=23 width=59) (actual time=100.268..100.292 rows=278 loops=1)
+   Sort Key: s.amount
+   Sort Method: quicksort  Memory: 48kB
+   Buffers: shared hit=1967 read=19698 written=8
+   InitPlan 2 (returns $1)
+     ->  Result  (cost=0.45..0.46 rows=1 width=4) (actual time=0.022..0.023 rows=1 loops=1)
+           Buffers: shared hit=2 read=2
+           InitPlan 1 (returns $0)
+             ->  Limit  (cost=0.43..0.45 rows=1 width=4) (actual time=0.020..0.021 rows=1 loops=1)
+                   Buffers: shared hit=2 read=2
+                   ->  Index Only Scan Backward using idx_salary_fromdate on salary  (cost=0.43..59783.25 rows=2844047 width=4) (actual time=0.019..0.019 rows=1 loops=1)
+                         Index Cond: (from_date IS NOT NULL)
+                         Heap Fetches: 0
+                         Buffers: shared hit=2 read=2
+   InitPlan 4 (returns $3)
+     ->  Result  (cost=0.45..0.46 rows=1 width=4) (actual time=0.019..0.020 rows=1 loops=1)
+           Buffers: shared hit=2 read=2
+           InitPlan 3 (returns $2)
+             ->  Limit  (cost=0.43..0.45 rows=1 width=4) (actual time=0.017..0.018 rows=1 loops=1)
+                   Buffers: shared hit=2 read=2
+                   ->  Index Only Scan Backward using idx_salary_todate on salary salary_1  (cost=0.43..59731.25 rows=2844047 width=4) (actual time=0.016..0.017 rows=1 loops=1)
+                         Index Cond: (to_date IS NOT NULL)
+                         Heap Fetches: 0
+                         Buffers: shared hit=2 read=2
+   InitPlan 5 (returns $4)
+     ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.000..0.001 rows=1 loops=1)
+   InitPlan 6 (returns $5)
+     ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.002..0.002 rows=1 loops=1)
+   ->  Nested Loop  (cost=9.51..2680.10 rows=23 width=59) (actual time=12.141..100.137 rows=278 loops=1)
+         Join Filter: (de.department_id = d.id)
+         Rows Removed by Join Filter: 965
+         Buffers: shared hit=1967 read=19698 written=8
+         ->  Nested Loop  (cost=9.51..2676.04 rows=23 width=39) (actual time=12.131..99.808 rows=278 loops=1)
+               Join Filter: (s.employee_id = e.id)
+               Buffers: shared hit=1966 read=19698 written=8
+               ->  Nested Loop  (cost=9.09..2663.57 rows=23 width=48) (actual time=12.121..98.152 rows=278 loops=1)
+                     Join Filter: (s.employee_id = t.employee_id)
+                     Buffers: shared hit=1310 read=19242 written=8
+                     ->  Nested Loop  (cost=8.67..2637.04 rows=42 width=29) (actual time=12.108..96.258 rows=278 loops=1)
+                           Buffers: shared hit=677 read=18763 written=7
+                           ->  Bitmap Heap Scan on salary s  (cost=8.24..1764.62 rows=107 width=16) (actual time=12.084..94.276 rows=278 loops=1)
+                                 Recheck Cond: (to_date = $3)
+                                 Filter: ((from_date >= $1) AND (amount < 67690))
+                                 Rows Removed by Filter: 239846
+                                 Heap Blocks: exact=18115
+                                 Buffers: shared hit=6 read=18322 written=7
+                                 ->  Bitmap Index Scan on idx_salary_todate  (cost=0.00..8.22 rows=505 width=0) (actual time=7.836..7.836 rows=240124 loops=1)
+                                       Index Cond: (to_date = $3)
+                                       Buffers: shared hit=4 read=205
+                           ->  Index Scan using idx_department_employee_employeeid on department_employee de  (cost=0.42..8.14 rows=1 width=13) (actual time=0.006..0.006 rows=1 loops=278)
+                                 Index Cond: (employee_id = s.employee_id)
+                                 Filter: (to_date > $5)
+                                 Rows Removed by Filter: 0
+                                 Buffers: shared hit=671 read=441
+                     ->  Index Scan using idx_title_empid on title t  (cost=0.42..0.62 rows=1 width=19) (actual time=0.006..0.006 rows=1 loops=278)
+                           Index Cond: (employee_id = de.employee_id)
+                           Filter: (to_date > $4)
+                           Rows Removed by Filter: 0
+                           Buffers: shared hit=633 read=479 written=1
+               ->  Index Scan using idx_employee_id_primary on employee e  (cost=0.42..0.53 rows=1 width=23) (actual time=0.005..0.005 rows=1 loops=278)
+                     Index Cond: (id = t.employee_id)
+                     Buffers: shared hit=656 read=456
+         ->  Materialize  (cost=0.00..1.14 rows=9 width=5) (actual time=0.000..0.000 rows=4 loops=278)
+               Buffers: shared hit=1
+               ->  Seq Scan on department d  (cost=0.00..1.09 rows=9 width=5) (actual time=0.005..0.006 rows=9 loops=1)
+                     Buffers: shared hit=1
+ Planning:
+   Buffers: shared hit=195 read=1
+ Planning Time: 1.805 ms
+ Execution Time: 100.351 ms
+(70 rows)
 ```
-Запрос по изменению данных после доработки структуры базы отработал дольше. Дополнительное время потребовалось на обновление структурированных индексов. 
+Запрос по обновлению данных после доработки структуры базы отработал значительно быстрее даже с учетом обновления индексов которых ранее не было. 
 
-Ранее время обработки было - Execution Time: 18231.000 ms
+Ранее время обработки было - Execution Time: 2427.629 ms
 
-После доработки структуры - Execution Time: 
+После доработки структуры - Execution Time: 897.711 ms
 
 ```
-employees_1=# 
+employees_1=# explain (analyze, buffers)
+update employees.salary
+ set amount = (67690 + (amount/3))
+where employee_id in
+ (select s.employee_id
+  from employees.salary as s
+  Join employees.employee as e
+   on s.employee_id = e.id
+  join employees.title as t
+   on s.employee_id = t.employee_id
+  join employees.department_employee as de
+   on e.id = de.employee_id
+  join employees.department as d
+   on d.id = de.department_id
+  where
+   s.from_date >= (select max(from_date) from employees.salary)
+   and s.to_date = (select max(to_date) from employees.salary)
+   and t.to_date > (select current_date)
+   and de.to_date > (select current_date)
+   and s.amount < 67690
+)
+and from_date >= (select max(from_date) from employees.salary)
+and to_date = (select max(to_date) from employees.salary)
+and amount < 67690;
+                                                                                         QUERY PLAN
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Update on salary  (cost=11.95..2874.74 rows=0 width=0) (actual time=686.314..686.321 rows=0 loops=1)
+   Buffers: shared hit=6644 read=20117 dirtied=693 written=78
+   InitPlan 2 (returns $1)
+     ->  Result  (cost=0.45..0.46 rows=1 width=4) (actual time=0.017..0.018 rows=1 loops=1)
+           Buffers: shared hit=2 read=2
+           InitPlan 1 (returns $0)
+             ->  Limit  (cost=0.43..0.45 rows=1 width=4) (actual time=0.015..0.016 rows=1 loops=1)
+                   Buffers: shared hit=2 read=2
+                   ->  Index Only Scan Backward using idx_salary_fromdate on salary salary_1  (cost=0.43..59783.25 rows=2844047 width=4) (actual time=0.014..0.015 rows=1 loops=1)
+                         Index Cond: (from_date IS NOT NULL)
+                         Heap Fetches: 0
+                         Buffers: shared hit=2 read=2
+   InitPlan 4 (returns $3)
+     ->  Result  (cost=0.45..0.46 rows=1 width=4) (actual time=0.030..0.031 rows=1 loops=1)
+           Buffers: shared hit=3 read=1
+           InitPlan 3 (returns $2)
+             ->  Limit  (cost=0.43..0.45 rows=1 width=4) (actual time=0.027..0.027 rows=1 loops=1)
+                   Buffers: shared hit=3 read=1
+                   ->  Index Only Scan Backward using idx_salary_todate on salary salary_2  (cost=0.43..59731.25 rows=2844047 width=4) (actual time=0.025..0.025 rows=1 loops=1)
+                         Index Cond: (to_date IS NOT NULL)
+                         Heap Fetches: 0
+                         Buffers: shared hit=3 read=1
+   InitPlan 6 (returns $5)
+     ->  Result  (cost=0.45..0.46 rows=1 width=4) (actual time=0.009..0.010 rows=1 loops=1)
+           Buffers: shared hit=4
+           InitPlan 5 (returns $4)
+             ->  Limit  (cost=0.43..0.45 rows=1 width=4) (actual time=0.008..0.008 rows=1 loops=1)
+                   Buffers: shared hit=4
+                   ->  Index Only Scan Backward using idx_salary_fromdate on salary salary_3  (cost=0.43..59783.25 rows=2844047 width=4) (actual time=0.007..0.007 rows=1 loops=1)
+                         Index Cond: (from_date IS NOT NULL)
+                         Heap Fetches: 0
+                         Buffers: shared hit=4
+   InitPlan 8 (returns $7)
+     ->  Result  (cost=0.45..0.46 rows=1 width=4) (actual time=0.007..0.008 rows=1 loops=1)
+           Buffers: shared hit=4
+           InitPlan 7 (returns $6)
+             ->  Limit  (cost=0.43..0.45 rows=1 width=4) (actual time=0.006..0.007 rows=1 loops=1)
+                   Buffers: shared hit=4
+                   ->  Index Only Scan Backward using idx_salary_todate on salary salary_4  (cost=0.43..59731.25 rows=2844047 width=4) (actual time=0.006..0.006 rows=1 loops=1)
+                         Index Cond: (to_date IS NOT NULL)
+                         Heap Fetches: 0
+                         Buffers: shared hit=4
+   InitPlan 9 (returns $8)
+     ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.002..0.002 rows=1 loops=1)
+   InitPlan 10 (returns $9)
+     ->  Result  (cost=0.00..0.01 rows=1 width=4) (actual time=0.000..0.000 rows=1 loops=1)
+   ->  Nested Loop Semi Join  (cost=10.08..2872.87 rows=1 width=44) (actual time=29.098..672.303 rows=278 loops=1)
+         Buffers: shared hit=3378 read=19973 written=75
+         ->  Bitmap Heap Scan on salary  (cost=8.24..1764.62 rows=107 width=22) (actual time=16.495..102.261 rows=278 loops=1)
+               Recheck Cond: (to_date = $3)
+               Filter: ((from_date >= $1) AND (amount < 67690))
+               Rows Removed by Filter: 239846
+               Heap Blocks: exact=18115
+               Buffers: shared hit=8 read=18320 written=68
+               ->  Bitmap Index Scan on idx_salary_todate  (cost=0.00..8.22 rows=505 width=0) (actual time=12.799..12.799 rows=240124 loops=1)
+                     Index Cond: (to_date = $3)
+                     Buffers: shared hit=5 read=204
+         ->  Nested Loop  (cost=1.83..10.35 rows=1 width=62) (actual time=2.049..2.049 rows=1 loops=278)
+               Buffers: shared hit=3370 read=1653 written=7
+               ->  Nested Loop  (cost=1.70..10.19 rows=1 width=61) (actual time=2.043..2.043 rows=1 loops=278)
+                     Join Filter: (salary.employee_id = s.employee_id)
+                     Buffers: shared hit=2814 read=1653 written=7
+                     ->  Nested Loop  (cost=1.27..9.16 rows=1 width=47) (actual time=0.023..0.023 rows=1 loops=278)
+                           Buffers: shared hit=1960 read=1376 written=6
+                           ->  Nested Loop  (cost=0.84..8.67 rows=1 width=28) (actual time=0.015..0.015 rows=1 loops=278)
+                                 Buffers: shared hit=1290 read=934 written=3
+                                 ->  Index Scan using idx_employee_id_primary on employee e  (cost=0.42..8.14 rows=1 width=14) (actual time=0.007..0.007 rows=1 loops=278)
+                                       Index Cond: (id = salary.employee_id)
+                                       Buffers: shared hit=656 read=456 written=2
+                                 ->  Index Scan using idx_title_empid on title t  (cost=0.42..0.52 rows=1 width=14) (actual time=0.007..0.007 rows=1 loops=278)
+                                       Index Cond: (employee_id = e.id)
+                                       Filter: (to_date > $8)
+                                       Rows Removed by Filter: 0
+                                       Buffers: shared hit=634 read=478 written=1
+                           ->  Index Scan using idx_department_employee_employeeid on department_employee de  (cost=0.42..0.48 rows=1 width=19) (actual time=0.007..0.007 rows=1 loops=278)
+                                 Index Cond: (employee_id = e.id)
+                                 Filter: (to_date > $9)
+                                 Rows Removed by Filter: 0
+                                 Buffers: shared hit=670 read=442 written=3
+                     ->  Index Scan using idx_salary_empid on salary s  (cost=0.43..1.02 rows=1 width=14) (actual time=2.019..2.019 rows=1 loops=278)
+                           Index Cond: (employee_id = e.id)
+                           Filter: ((from_date >= $5) AND (amount < 67690) AND (to_date = $7))
+                           Rows Removed by Filter: 8
+                           Buffers: shared hit=854 read=277 written=1
+               ->  Index Scan using idx_department_id_primary on department d  (cost=0.14..0.15 rows=1 width=11) (actual time=0.003..0.003 rows=1 loops=278)
+                     Index Cond: (id = de.department_id)
+                     Buffers: shared hit=556
+ Planning:
+   Buffers: shared hit=215
+ Planning Time: 1.898 ms
+ Execution Time: 897.711 ms
+(91 rows)
 ```
-Выводы: В запросах массового изменения данных структура индексов продлевает отработку поскольку требует дополнительного времени на синхронизацию  данных таблицы с индексами, для потдержания данных в индексах в актульаном состоянии, что положительно влияет на последующую работу оптимизатора  с ними в рамках будущих запросов.
+Выводы: В запросах массового изменения данных структура индексов может продлевает отработку поскольку требует дополнительного времени на синхронизацию  данных таблицы с индексами, для потдержания данных в индексах в актульаном состоянии, что положительно влияет на последующую работу оптимизатора  с ними в рамках будущих запросов.
 
 Далее будем тестировать запросы со сбором минимального набота данных при котором структура индексов, ключей и дополнительные изменения столбцов должны показать белее оптимальные рузультаты. Для тестирования будем использовать третью копию базы employees_2 без структуры.
 
-### Выводы и рекомендации по нормализации данных.
+### Личные рекомендации по нормализации данных.
 а. Было бы эффективнее упразднить таблицу справочник руководителей подразделений department_manager. Данные этой таблицы хоть и позволяют отслеживать историю смены руководителей но такая история уже есть совокупно в таблицах привязки сотрудника к департаменту с таблицей должностей. Иными словами можно выдать историю смены руководителей отдела связанным запросом, а не занимать под эти «результатирующие данные» диски (эта таблица дублирует уже имеющиеся данные).
 
 б. Поле title таблицы employees.title имеет повторяющиеся значения, поэтому целесообразным было бы вынести значения данного поля в отдельный справочник, а в employees.title оставить только id на каждую должность из нового справочника.
@@ -1022,5 +1216,5 @@ loops=1)
 ## Цель достигнута!
 
 ## Выводы
-Оптимизировать структуру базы необходимо с учетом логигики всех запросов работающих совокупно с её данными, поскольку нужно учитывать оптимальную работу всех операторов DML работающих с этой структурой.  
+При оптимизации структуру базы необходимо учитывать логигику всех запросов работающих совокупно с её данными, поскольку не всегда оптимизация структуры для одного запроса благотворно повлияет на производительность другого запроса работающего с этой структурой. 
 
