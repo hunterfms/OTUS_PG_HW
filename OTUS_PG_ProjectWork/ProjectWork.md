@@ -4,6 +4,31 @@
 
 Восстанавливаем на виртуальной машине PG15 DataSet "Employees database" с общим количеством строк в таблицах 3919015, с ресурса: https://raw.githubusercontent.com/neondatabase/postgres-sample-dbs/main/employees.sql.gz
 
+Конфигурационный файл виртуальной машины настроен по рекомендациям PGTune
+```
+# DB Version: 15
+# OS Type: linux
+# DB Type: desktop
+# Total Memory (RAM): 1 GB
+# CPUs num: 1
+# Connections num: 100
+# Data Storage: hdd
+
+max_connections = 100
+shared_buffers = 64MB
+effective_cache_size = 256MB
+maintenance_work_mem = 64MB
+checkpoint_completion_target = 0.9
+wal_buffers = 1966kB
+default_statistics_target = 100
+random_page_cost = 4
+effective_io_concurrency = 2
+work_mem = 273kB
+huge_pages = off
+min_wal_size = 100MB
+max_wal_size = 2GB
+```
+
 DataSet включает в себя структуру таблиц с данными в виде справочников о сотрудниках компании, их должностях в отделах компании, уровню годовых зарплат и детальную информацию по выдаче зарплат за определенный период времени. Справочники содержат информацию с раскладкой по датам принятия на работу сотрудников и даты их увольнения. Данные регистрации выдачи зарплат также сопровождаются датами их выполнения. 
 Характер данных по таблицам:
 
@@ -309,7 +334,7 @@ and to_date = (select max(to_date) from employees.salary)
 and amount < 67690;
 ```
 9)  Проверка производительности запросов на неоптимизированной структуре базы с актуальным планом explain (analyze)
- а. Выводим актуальный план запроса Select через explain (analyze) который выводит 107728 сотрудников с зарплатами менее прожиточного минимума. Execution Time: 1260.088 ms. Первый запуск длился в пределах Execution Time: 411367.804 ms с той же структурой плана в резульаттах, скорее сего из за расчета первого плана запроса. Далее мной применялся ANALYSE;, что бы учесть статистику первого запуска и применить уже более оптимальный план выполнения.
+ а. Выводим актуальный план запроса Select через explain (analyze) который выводит сотрудников с зарплатами менее прожиточного минимума. Execution Time: 1260.088 ms. Первый запуск длился в пределах Execution Time: 411367.804 ms с той же структурой плана в резульаттах, скорее сего из за расчета первого плана запроса. Далее мной применялся ANALYSE;, что бы учесть статистику первого запуска и применить уже более оптимальный план выполнения.
 ```
 employees=# analyse;
 ANALYZE
@@ -425,7 +450,7 @@ ORDER BY s.amount;
 ```
 В выведенном плане наблюдаем в основном блоки Seq Scan из за отсутсвия индексов и соответсвенно высокую длительность обработки Execution Time.
 
- б. Выводим актуальный план запроса Update через explain (analyze, buffers) при котором реально обновляются 107728 строки таблицы зарплат employees.salary. Execution Execution Time: 2427.629 ms
+ б. Выводим актуальный план запроса Update через explain (analyze, buffers) при котором реально обновляются данные таблицы зарплат employees.salary. Execution Execution Time: 2427.629 ms
 ```
 employees=# explain (analyze, buffers)
 update employees.salary
