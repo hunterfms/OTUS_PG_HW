@@ -4,7 +4,7 @@
 
 Восстанавливаем на виртуальной машине PG15 DataSet "Employees database" с общим количеством строк в таблицах 3919015, с ресурса: https://raw.githubusercontent.com/neondatabase/postgres-sample-dbs/main/employees.sql.gz
 
-Конфигурационный файл виртуальной машины настроен по рекомендациям PGTune
+Конфигурационный файл виртуальной СУБД Postgresql 15 настроен по рекомендациям PGTune
 ```
 # DB Version: 15
 # OS Type: linux
